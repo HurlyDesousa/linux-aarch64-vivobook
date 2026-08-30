@@ -1,0 +1,7 @@
+src/
+pkg/
+*.pkg.tar*
+linux-7.2/
+linux-7.2.tar.xz
+patch-*.xz
+config.alarm

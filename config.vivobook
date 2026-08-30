@@ -1,0 +1,11 @@
+# ASUS Vivobook S15 S5507QA (x1e80100) fragment.
+# Merged on top of Arch Linux ARM core/linux-aarch64 config.
+#
+# RESET_GPIO: WSA speaker amp reset. Live 7.2.0-2 has this unset;
+# ALARM master currently sets =m. Built-in so the codec can deassert
+# reset without waiting on a module.
+CONFIG_RESET_GPIO=y
+#
+# IRIS video decode. Cheap if the QCOM media stack is already present.
+# Still needs qcvss8380.mbn in firmware (not in this repo).
+CONFIG_VIDEO_QCOM_IRIS=m
