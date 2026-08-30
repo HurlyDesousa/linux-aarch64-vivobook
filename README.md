@@ -41,10 +41,12 @@ On the running 7.2-2 module:
   module. Re-adding the 2025 "Shutdown lite ADSP DTB on X1E" patch is a no-op.
 - Lenovo 21N1 `adsp_dtbs.elf` also returned -22. Reverted.
 
-Remaining -22 is likely TZ still holding the lite DTB region, metadata/ELF
-auth, or a later mainline carveout/auth-reset path that is not in 7.2-2. That
-is unverified. RESET_GPIO does not fix ADSP bring-up; it is for speaker unmute
-*after* ADSP is up.
+The -22 is TZ rejecting `adsp_dtbs.elf` metadata at
+`qcom_scm_pas_init_image(pas_id=0x24)` after a valid hash PHDR parse. Later
+7.3 PAS map/unmap work runs *after* INIT succeeds, so it cannot change this.
+Lenovo DTB also returning -22 is OEM-key reject, not leftover lite DTB.
+RESET_GPIO does not fix ADSP bring-up; it is for speaker unmute *after* ADSP
+is up. See `docs/adsp-22.md`.
 
 ## Build and install (on the Vivobook)
 
