@@ -10,7 +10,7 @@ _alarmrel=2
 _srcname=linux-7.2
 _desc="AArch64 Vivobook S15 (x1e80100)"
 pkgver=${_alarmver}
-pkgrel=1
+pkgrel=2
 arch=('aarch64')
 url="https://github.com/HurlyDesousa/linux-aarch64-vivobook"
 license=('GPL-2.0-only')
@@ -26,7 +26,8 @@ source=("https://www.kernel.org/pub/linux/kernel/v7.x/${_srcname}.tar.xz"
         "${_alarm}/0005-arm64-dts-rpi5-add-RP1-UART0-GPIO14-15-console.patch"
         "${_alarm}/config"
         "${_alarm}/linux.preset"
-        "config.vivobook")
+        "config.vivobook"
+        "patches/0001-x1e-adsp-dtb-init-after-power.patch")
 # md5 of the files this PKGBUILD actually downloads (kernel.org + GitHub raw).
 # Do not copy ALARM's md5sums array: theirs is aligned to extra chromebook
 # sources and does not match these URLs.
@@ -39,7 +40,8 @@ md5sums=('381ae4b20294dcf4b8f63f1fd1bb7017'  # linux-7.2.tar.xz
          '24c403d3738a418a67b8c0e7659380aa'  # 0005
          '571de3681ddc773bb85e323b92e407da'  # config
          'f82b1a5732c416762bbc88e00b1a4b15'  # linux.preset
-         'SKIP')                             # config.vivobook
+         'SKIP'                             # config.vivobook
+         'SKIP')                             # 0001 x1e adsp
 
 prepare() {
   cd $_srcname
@@ -57,6 +59,7 @@ prepare() {
   git apply ../0003-Revert-arm64-dts-rockchip-Move-rk3568-PCIe3-MSI-to-u.patch
   git apply ../0004-serial-amba-pl011-add-arm-pl011-axi-binding-for-RP1.patch
   git apply ../0005-arm64-dts-rpi5-add-RP1-UART0-GPIO14-15-console.patch
+  git apply --verbose ../0001-x1e-adsp-dtb-init-after-power.patch
 
   cat "${srcdir}/config" > ./.config
   ./scripts/kconfig/merge_config.sh -m .config "${srcdir}/config.vivobook"
@@ -79,8 +82,8 @@ _package() {
   pkgdesc="The Linux Kernel and modules - ${_desc}"
   depends=('coreutils' 'kmod' 'mkinitcpio>=0.7')
   optdepends=('linux-firmware: firmware images needed for some devices')
-  provides=("linux=7.2" "linux=${pkgver}" "KSMBD-MODULE" "WIREGUARD-MODULE")
-  conflicts=('linux' 'linux-aarch64')
+  # Dual-boot with stock linux-aarch64: do not Provide linux or Conflict it.
+  provides=('KSMBD-MODULE' 'WIREGUARD-MODULE')
   install=${pkgname}.install
 
   cd $_srcname
@@ -93,7 +96,12 @@ _package() {
 
   echo "Installing modules..."
   make INSTALL_MOD_PATH="$pkgdir/usr" INSTALL_MOD_STRIP=1 DEPMOD=/doesnt/exist modules_install
-  rm "$modulesdir"/build
+  rm -f "$modulesdir"/build
+
+  # Omarchy linux-aarch64-pkgbase-shim / limine-mkinitcpio-hook look here.
+  # UKI name becomes omarchy_linux-aarch64-vivobook.efi
+  echo "$pkgbase" | install -Dm644 /dev/stdin "$modulesdir/pkgbase"
+  install -Dm644 arch/arm64/boot/Image "$modulesdir/vmlinuz"
 
   local _subst="
     s|%PKGBASE%|${pkgbase}|g
@@ -108,8 +116,8 @@ _package() {
 
 _package-headers() {
   pkgdesc="Header files and scripts for building modules for linux kernel - ${_desc}"
-  provides=("linux-headers=${pkgver}" "linux-headers=7.2")
-  conflicts=('linux-headers' 'linux-aarch64-headers')
+  # Unique kver path; do not conflict stock linux-aarch64-headers.
+  provides=()
 
   cd $_srcname
   local builddir="$pkgdir/usr/lib/modules/$(<version)/build"

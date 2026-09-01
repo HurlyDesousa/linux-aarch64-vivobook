@@ -1,14 +1,13 @@
 post_install() {
   cat <<MSG
-linux-aarch64-vivobook installed.
+linux-aarch64-vivobook installed (stock linux-aarch64 left in place).
 
 Rebuild the Omarchy UKI and reboot:
 
   sudo limine-update
 
-UKI path on this laptop: /boot/EFI/Linux/omarchy_linux-aarch64.efi
-
-This package Provides: linux=7.2 so Limine/mkinitcpio keep working.
+Expected UKI: /boot/EFI/Linux/omarchy_linux-aarch64-vivobook.efi
+Keep the old omarchy_linux-aarch64.efi as fallback.
 MSG
 }
 
@@ -20,5 +19,5 @@ post_upgrade() {
 }
 
 post_remove() {
-  echo "Removed linux-aarch64-vivobook. Install linux-aarch64 again, then: sudo limine-update"
+  echo "Removed linux-aarch64-vivobook. Stock linux-aarch64 is unchanged. Run: sudo limine-update"
 }

@@ -5,10 +5,10 @@ Custom [Arch Linux ARM](https://github.com/archlinuxarm/PKGBUILDs/tree/master/co
 X1E-78-100, DTB `x1e80100-asus-vivobook-s15`) already running Omarchy ARM.
 
 This is **not** the omarchy-iso fork. Native-build on the laptop (X Elite).
+Dual-boots with stock `linux-aarch64`: this package does not Provide `linux`
+and does not Conflict the stock kernel.
 
 ## Config diff vs the live 7.2.0-2 kernel
-
-Live measurements:
 
 | Symbol | Live 7.2.0-2 | This fragment |
 |--------|----------------|---------------|
@@ -18,35 +18,32 @@ Live measurements:
 | `CONFIG_QCOM_Q6V5_PAS` | m | unchanged |
 | `CONFIG_SND_SOC_SC8280XP` | m | unchanged |
 
-ALARM's current `core/linux-aarch64` config already has `CONFIG_RESET_GPIO=m`.
-The live box is `7.2.0-2-aarch64-ARCH` with it **unset**. We force `=y` so the
-reset controller is there before the codec probes.
-
 See `config.vivobook`. The PKGBUILD starts from ALARM's full `config` and
 merges this fragment.
 
-## ADSP -22 (honest call)
+## ADSP -22
 
-**RESET_GPIO-only.** No kernel patch in this tree claims to fix ADSP.
+Not a DTS carveout mismatch. The ELF and the 7.2 DTS already agree:
 
-On the running 7.2-2 module:
+- `adsp_dtbs.elf` PT_LOAD paddr `0x8b800000` filesz `0x10e4c` (CFGL + 8 DTBs:
+  hamoa/purwa default, charger, audio, sensor)
+- `remoteproc_adsp` memory-region is `adspslpi@87e00000` + `q6-adsp-dtb@8b800000`
+- `qcadsp8380.mbn` paddr starts at `0x87e00000` (adspslpi)
+- CDSP ELF `0x8d900000` matches `q6-cdsp-dtb` and **runs**
+- PAS ids already `pas=1`, `dtb=0x24`, `lite=0x1f`, `lite_dtb=0x29`
 
-- Firmware from official ASUS S5507QA Qualcomm BSP V1.318.7800.0 is already
-  installed under `/usr/lib/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/`.
-  Blobs are **not** in this repo.
-- CDSP remoteproc runs. ADSP fails every boot:
-  `qcom_q6v5_pas error -22 initializing firmware .../adsp_dtbs.elf` then
-  `Failed to load program segments: -22`.
-- `lite_pas_id=0x1f` and `lite_dtb_pas_id=0x29` are **already** in the 7.2-2
-  module. Re-adding the 2025 "Shutdown lite ADSP DTB on X1E" patch is a no-op.
-- Lenovo 21N1 `adsp_dtbs.elf` also returned -22. Reverted.
+The -22 is `qcom_scm_pas_init_image(0x24)` (TZ metadata), raised from
+`qcom_pas_load()` **before** LCX/LMX and XO are enabled. Lite ADSP is already
+up from UEFI. pkgrel 2 moves that init into `qcom_pas_start()` after power,
+shuts down leftover PAS 0x24 / PAS 1 as well as lite, PAGE-aligns the
+metadata DMA buffer, and logs every shutdown errno.
 
-The -22 is TZ rejecting `adsp_dtbs.elf` metadata at
-`qcom_scm_pas_init_image(pas_id=0x24)` after a valid hash PHDR parse. Later
-7.3 PAS map/unmap work runs *after* INIT succeeds, so it cannot change this.
-Lenovo DTB also returning -22 is OEM-key reject, not leftover lite DTB.
-RESET_GPIO does not fix ADSP bring-up; it is for speaker unmute *after* ADSP
-is up. See `docs/adsp-22.md`.
+See [docs/adsp-22.md](docs/adsp-22.md) and
+`patches/0001-x1e-adsp-dtb-init-after-power.patch`.
+
+If ADSP still fails after reboot, grab the new `PAS shutdown` dmesg lines.
+`0` on lite/dtb then still `-22` on init means TZ policy (not this sequence).
+A non-zero lite shutdown means TZ will not release UEFI lite ADSP.
 
 ## Build and install (on the Vivobook)
 
@@ -60,9 +57,10 @@ sudo limine-update
 sudo reboot
 ```
 
-`Provides: linux=7.2` so Omarchy Limine / mkinitcpio still resolve. Conflicts
-with stock `linux-aarch64`. UKI path:
-`/boot/EFI/Linux/omarchy_linux-aarch64.efi`.
+Does **not** replace stock `linux-aarch64`. The Omarchy hook should build
+`/boot/EFI/Linux/omarchy_linux-aarch64-vivobook.efi` because the package
+ships `/usr/lib/modules/<kver>/{pkgbase,vmlinuz}` with `pkgbase=linux-aarch64-vivobook`.
+Keep the old kernel as the Limine fallback.
 
 Kernel tarball is large. Build on the laptop, not a GitHub runner.
 
