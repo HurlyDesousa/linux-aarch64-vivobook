@@ -1,0 +1,169 @@
+From: Code Master <code-master@local>
+Subject: remoteproc: qcom_q6v5_pas: init x1e ADSP DTB after power, shutdown leftover PAS
+
+Move ADSP DTB PAS_INIT_IMAGE to after proxy PDs/XO, shutdown leftover
+full PAS ids, and PAGE-align metadata DMA.
+
+--- a/drivers/remoteproc/qcom_q6v5_pas.c
++++ b/drivers/remoteproc/qcom_q6v5_pas.c
+@@ -216,41 +216,27 @@
+ 	return 0;
+ }
+ 
+-static int qcom_pas_load(struct rproc *rproc, const struct firmware *fw)
++static void qcom_pas_try_shutdown(struct qcom_pas *pas, int pas_id,
++				  const char *what)
+ {
+-	struct qcom_pas *pas = rproc->priv;
+ 	int ret;
+ 
+-	/* Store firmware handle to be used in qcom_pas_start() */
+-	pas->firmware = fw;
++	if (!pas_id)
++		return;
+ 
+-	if (pas->lite_pas_id)
+-		qcom_scm_pas_shutdown(pas->lite_pas_id);
+-	if (pas->lite_dtb_pas_id)
+-		qcom_scm_pas_shutdown(pas->lite_dtb_pas_id);
++	ret = qcom_scm_pas_shutdown(pas_id);
++	dev_info(pas->dev, "PAS shutdown %s (id=0x%x): %d\n",
++		 what, pas_id, ret);
++}
+ 
+-	if (pas->dtb_pas_id) {
+-		ret = request_firmware(&pas->dtb_firmware, pas->dtb_firmware_name, pas->dev);
+-		if (ret) {
+-			dev_err(pas->dev, "request_firmware failed for %s: %d\n",
+-				pas->dtb_firmware_name, ret);
+-			return ret;
+-		}
++static int qcom_pas_load(struct rproc *rproc, const struct firmware *fw)
++{
++	struct qcom_pas *pas = rproc->priv;
+ 
+-		ret = qcom_mdt_pas_load(pas->dtb_pas_ctx, pas->dtb_firmware,
+-					pas->dtb_firmware_name, pas->dtb_mem_region,
+-					&pas->dtb_mem_reloc);
+-		if (ret)
+-			goto release_dtb_metadata;
+-	}
++	/* Store firmware handle to be used in qcom_pas_start() */
++	pas->firmware = fw;
+ 
+ 	return 0;
+-
+-release_dtb_metadata:
+-	qcom_scm_pas_metadata_release(pas->dtb_pas_ctx);
+-	release_firmware(pas->dtb_firmware);
+-
+-	return ret;
+ }
+ 
+ static void qcom_pas_unmap_carveout(struct rproc *rproc, phys_addr_t mem_phys, size_t size)
+@@ -302,10 +288,35 @@
+ 			goto disable_cx_supply;
+ 	}
+ 
++	/*
++	 * UEFI starts lite ADSP for charging. Do not PAS_INIT the replacement
++	 * DTB until proxy PDs and XO are on, and always drop leftover PAS
++	 * state (including full pas_id / dtb_pas_id, in case this TZ parked
++	 * lite on those ids).
++	 */
++	qcom_pas_try_shutdown(pas, pas->lite_pas_id, "lite");
++	qcom_pas_try_shutdown(pas, pas->lite_dtb_pas_id, "lite-dtb");
++	qcom_pas_try_shutdown(pas, pas->dtb_pas_id, "dtb");
++	qcom_pas_try_shutdown(pas, pas->pas_id, "main");
++
+ 	if (pas->dtb_pas_id) {
++		ret = request_firmware(&pas->dtb_firmware, pas->dtb_firmware_name,
++				       pas->dev);
++		if (ret) {
++			dev_err(pas->dev, "request_firmware failed for %s: %d\n",
++				pas->dtb_firmware_name, ret);
++			goto disable_px_supply;
++		}
++
++		ret = qcom_mdt_pas_load(pas->dtb_pas_ctx, pas->dtb_firmware,
++					pas->dtb_firmware_name, pas->dtb_mem_region,
++					&pas->dtb_mem_reloc);
++		if (ret)
++			goto release_dtb_firmware;
++
+ 		ret = qcom_pas_map_carveout(rproc, pas->dtb_mem_phys, pas->dtb_mem_size);
+ 		if (ret)
+-			goto disable_px_supply;
++			goto release_dtb_firmware;
+ 
+ 		ret = qcom_scm_pas_prepare_and_auth_reset(pas->dtb_pas_ctx);
+ 		if (ret) {
+@@ -347,6 +358,11 @@
+ 	/* firmware is used to pass reference from qcom_pas_start(), drop it now */
+ 	pas->firmware = NULL;
+ 
++	if (pas->dtb_firmware) {
++		release_firmware(pas->dtb_firmware);
++		pas->dtb_firmware = NULL;
++	}
++
+ 	return 0;
+ 
+ unmap_carveout:
+@@ -359,6 +375,12 @@
+ unmap_dtb_carveout:
+ 	if (pas->dtb_pas_id)
+ 		qcom_pas_unmap_carveout(rproc, pas->dtb_mem_phys, pas->dtb_mem_size);
++release_dtb_firmware:
++	if (pas->dtb_firmware) {
++		release_firmware(pas->dtb_firmware);
++		pas->dtb_firmware = NULL;
++	}
++	qcom_scm_pas_metadata_release(pas->dtb_pas_ctx);
+ disable_px_supply:
+ 	if (pas->px_supply)
+ 		regulator_disable(pas->px_supply);
+--- a/drivers/firmware/qcom/qcom_scm.c
++++ b/drivers/firmware/qcom/qcom_scm.c
+@@ -642,8 +642,9 @@
+ 	phys_addr_t mdata_phys;
+ 	void *mdata_buf;
+ 	int ret;
++	size_t alloc_size = ALIGN(size, SZ_4K);
+ 
+-	mdata_buf = qcom_tzmem_alloc(__scm->mempool, size, GFP_KERNEL);
++	mdata_buf = qcom_tzmem_alloc(__scm->mempool, alloc_size, GFP_KERNEL);
+ 	if (!mdata_buf)
+ 		return -ENOMEM;
+ 
+@@ -683,6 +684,7 @@
+ 	dma_addr_t mdata_phys;
+ 	void *mdata_buf;
+ 	int ret;
++	size_t alloc_size = ALIGN(size, SZ_4K);
+ 
+ 	if (ctx && ctx->use_tzmem)
+ 		return qcom_scm_pas_prep_and_init_image(ctx, metadata, size);
+@@ -699,7 +701,7 @@
+ 	 * If we pass a buffer that is already part of an SHM Bridge to this
+ 	 * call, it will fail.
+ 	 */
+-	mdata_buf = dma_alloc_coherent(__scm->dev, size, &mdata_phys,
++	mdata_buf = dma_alloc_coherent(__scm->dev, alloc_size, &mdata_phys,
+ 				       GFP_KERNEL);
+ 	if (!mdata_buf)
+ 		return -ENOMEM;
+@@ -708,11 +710,11 @@
+ 
+ 	ret = __qcom_scm_pas_init_image(pas_id, mdata_phys, &res);
+ 	if (ret < 0 || !ctx) {
+-		dma_free_coherent(__scm->dev, size, mdata_buf, mdata_phys);
++		dma_free_coherent(__scm->dev, alloc_size, mdata_buf, mdata_phys);
+ 	} else if (ctx) {
+ 		ctx->ptr = mdata_buf;
+ 		ctx->phys = mdata_phys;
+-		ctx->size = size;
++		ctx->size = alloc_size;
+ 	}
+ 
+ 	return ret ? : res.result[0];

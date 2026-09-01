@@ -27,7 +27,7 @@ source=("https://www.kernel.org/pub/linux/kernel/v7.x/${_srcname}.tar.xz"
         "${_alarm}/config"
         "${_alarm}/linux.preset"
         "config.vivobook"
-        "patches/0001-x1e-adsp-dtb-init-after-power.patch")
+        "0001-x1e-adsp-dtb-init-after-power.patch")
 # md5 of the files this PKGBUILD actually downloads (kernel.org + GitHub raw).
 # Do not copy ALARM's md5sums array: theirs is aligned to extra chromebook
 # sources and does not match these URLs.
@@ -59,7 +59,7 @@ prepare() {
   git apply ../0003-Revert-arm64-dts-rockchip-Move-rk3568-PCIe3-MSI-to-u.patch
   git apply ../0004-serial-amba-pl011-add-arm-pl011-axi-binding-for-RP1.patch
   git apply ../0005-arm64-dts-rpi5-add-RP1-UART0-GPIO14-15-console.patch
-  git apply --verbose ../0001-x1e-adsp-dtb-init-after-power.patch
+  git apply --verbose "${srcdir}/0001-x1e-adsp-dtb-init-after-power.patch"
 
   cat "${srcdir}/config" > ./.config
   ./scripts/kconfig/merge_config.sh -m .config "${srcdir}/config.vivobook"
