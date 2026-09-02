@@ -10,7 +10,7 @@ _alarmrel=2
 _srcname=linux-7.2
 _desc="AArch64 Vivobook S15 (x1e80100)"
 pkgver=${_alarmver}
-pkgrel=3
+pkgrel=4
 arch=('aarch64')
 url="https://github.com/HurlyDesousa/linux-aarch64-vivobook"
 license=('GPL-2.0-only')
@@ -27,7 +27,8 @@ source=("https://www.kernel.org/pub/linux/kernel/v7.x/${_srcname}.tar.xz"
         "${_alarm}/config"
         "${_alarm}/linux.preset"
         "config.vivobook"
-        "0001-x1e-adsp-dtb-init-after-power.patch")
+        "0001-x1e-adsp-dtb-init-after-power.patch"
+        "0002-qcom-battmgr-capacity-from-energy.patch")
 # md5 of the files this PKGBUILD actually downloads (kernel.org + GitHub raw).
 # Do not copy ALARM's md5sums array: theirs is aligned to extra chromebook
 # sources and does not match these URLs.
@@ -41,7 +42,8 @@ md5sums=('381ae4b20294dcf4b8f63f1fd1bb7017'  # linux-7.2.tar.xz
          '571de3681ddc773bb85e323b92e407da'  # config
          'f82b1a5732c416762bbc88e00b1a4b15'  # linux.preset
          'SKIP'                             # config.vivobook
-         'SKIP')                             # 0001 x1e adsp
+         'SKIP'                             # 0001 x1e adsp
+         'SKIP')                             # 0002 battmgr capacity
 
 prepare() {
   cd $_srcname
@@ -60,6 +62,7 @@ prepare() {
   git apply ../0004-serial-amba-pl011-add-arm-pl011-axi-binding-for-RP1.patch
   git apply ../0005-arm64-dts-rpi5-add-RP1-UART0-GPIO14-15-console.patch
   git apply --verbose "${srcdir}/0001-x1e-adsp-dtb-init-after-power.patch"
+  git apply --verbose "${srcdir}/0002-qcom-battmgr-capacity-from-energy.patch"
 
   cat "${srcdir}/config" > ./.config
   ./scripts/kconfig/merge_config.sh -m .config "${srcdir}/config.vivobook"

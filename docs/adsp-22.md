@@ -135,3 +135,50 @@ lines appear **after** a successful init, then full ADSP + soundcard.
 
 A/B back to pkgrel 2 sequence: kernel cmdline
 `qcom_q6v5_pas.attach_lite_on_dtb_fail=0`.
+
+## 7.2.2-3 result (pkgrel 3, attach-to-lite worked)
+
+Booted on S5507QA, `7.2.0-3-aarch64-vivobook-ARCH`:
+
+- PAS shutdown dtb `0x24` -22, main `0x1` -22, then TZ rejected
+  `adsp_dtbs.elf` -22; attached to UEFI lite ADSP PAS `0x1f`
+- No lite shutdown before the DTB error
+- `remoteproc0` adsp running, `remoteproc1` cdsp running
+- battmgr: `status=Charging` `present=1` `voltage_now=11788000`
+  usb `online=1` ac `online=0`
+- No sysfs `capacity` or `charge_now` (**ENODATA** — the files exist,
+  reads fail). Lite ADSP does not send SOC.
+- `energy_now=6600000` `energy_full=56030000` (~12%).
+  `power_now=29265000`
+- `aplay -l`: no soundcards (expected on lite; do not try to fix audio)
+
+GLINK/battmgr against lite is up. Remaining battery UX hole is percent.
+
+## Kernel change (pkgrel 4)
+
+Second patch, `0002-qcom-battmgr-capacity-from-energy.patch` (0001
+attach-to-lite is unchanged):
+
+1. Add `POWER_SUPPLY_PROP_CAPACITY` to `x1e80100_bat_props` (7.2 listed
+   it for sc8280xp but not X Elite, so sysfs `capacity` was missing or
+   unreadable).
+2. In `qcom_battmgr_bat_get_property`, if `status.percent` is
+   `(unsigned int)-1` (the driver's "SOC not valid" sentinel from
+   `qcom_battmgr_sc8280xp_callback` when `last_full_capacity == 0`)
+   **and** `info.last_full_capacity > 0`: return
+   `DIV_ROUND_CLOSEST_ULL(energy_now * 100, energy_full)` clamped to
+   0..100. `energy_now` is `status.capacity`; `energy_full` is
+   `info.last_full_capacity` (uWh when `unit == mWh`).
+3. Prefer firmware SOC when `status.percent` is valid (full ADSP /
+   sm8350 `BATT_CAPACITY` later). Only fall back when SOC is missing.
+4. Do **not** invent `charge_now` (still ENODATA for mWh packs; that is
+   correct — use `energy_now`).
+
+After reboot into `7.2.2-4-aarch64-vivobook`:
+
+```
+cat /sys/class/power_supply/qcom-battmgr-bat/capacity
+```
+
+should print **~12** given the 7.2.2-3 energy ratio
+(`6600000/56030000`).

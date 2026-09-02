@@ -50,11 +50,20 @@ ADSP still needs a TZ-accepted DTB (QTI-CASS or qebspil), not another
 DTS change. `aplay -l` will stay empty on lite. Optional cmdline
 `qcom_q6v5_pas.attach_lite_on_dtb_fail=0` restores kill-lite-then-init.
 
-See [docs/adsp-22.md](docs/adsp-22.md). The patch lives at repo root as
-`0001-x1e-adsp-dtb-init-after-power.patch` (makepkg `source=()` basename;
-a copy under `patches/` is optional).
+**7.2.2-4 (pkgrel 4)** keeps attach-to-lite unchanged. 7.2.2-3 on S5507QA
+got lite ADSP + battmgr (Charging, energy_now/energy_full ~12%) but
+`capacity` / `charge_now` were ENODATA — lite does not send SOC.
+`0002-qcom-battmgr-capacity-from-energy.patch` exports CAPACITY on
+x1e80100 and, when firmware SOC is missing, returns
+`energy_now/energy_full` percent. Firmware SOC is still preferred when
+full ADSP later provides it. Do not expect `aplay -l` to grow a card.
 
-After reboot into `7.2.2-3-aarch64-vivobook`:
+See [docs/adsp-22.md](docs/adsp-22.md). Patches live at repo root as
+`0001-x1e-adsp-dtb-init-after-power.patch` and
+`0002-qcom-battmgr-capacity-from-energy.patch` (makepkg `source=()`
+basenames; copies under `patches/` are optional).
+
+After reboot into `7.2.2-4-aarch64-vivobook`:
 
 ```
 dmesg | grep -E 'PAS shutdown|initializing firmware|attaching to'

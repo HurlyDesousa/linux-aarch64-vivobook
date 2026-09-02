@@ -1,0 +1,39 @@
+From: Code Master <code-master@local>
+Subject: power: supply: qcom_battmgr: derive CAPACITY from energy when SOC missing
+
+Lite ADSP/battmgr on X Elite may not send SOC. Expose CAPACITY on
+x1e80100 and, when status.percent is unset, return
+DIV_ROUND_CLOSEST(energy_now * 100, energy_full) clamped to 0..100.
+Firmware SOC is preferred when present. charge_now is unchanged.
+
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -608,9 +608,18 @@
+ 		val->intval = battmgr->status.capacity;
+ 		break;
+ 	case POWER_SUPPLY_PROP_CAPACITY:
+-		if (battmgr->status.percent == (unsigned int)-1)
++		/* Prefer firmware SOC; lite ADSP may omit it (percent == UINT_MAX). */
++		if (battmgr->status.percent != (unsigned int)-1) {
++			val->intval = battmgr->status.percent;
++			break;
++		}
++		/* Derive from energy_now / energy_full (uWh) when SOC is missing. */
++		if (!battmgr->info.last_full_capacity)
+ 			return -ENODATA;
+-		val->intval = battmgr->status.percent;
++		val->intval = DIV_ROUND_CLOSEST_ULL(
++				(u64)battmgr->status.capacity * 100,
++				battmgr->info.last_full_capacity);
++		val->intval = clamp(val->intval, 0, 100);
+ 		break;
+ 	case POWER_SUPPLY_PROP_TEMP:
+ 		val->intval = battmgr->status.temperature;
+@@ -829,6 +838,7 @@
+ 	POWER_SUPPLY_PROP_STATUS,
+ 	POWER_SUPPLY_PROP_PRESENT,
+ 	POWER_SUPPLY_PROP_TECHNOLOGY,
++	POWER_SUPPLY_PROP_CAPACITY,
+ 	POWER_SUPPLY_PROP_CYCLE_COUNT,
+ 	POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN,
+ 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
