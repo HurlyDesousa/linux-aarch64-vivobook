@@ -32,18 +32,36 @@ Not a DTS carveout mismatch. The ELF and the 7.2 DTS already agree:
 - CDSP ELF `0x8d900000` matches `q6-cdsp-dtb` and **runs**
 - PAS ids already `pas=1`, `dtb=0x24`, `lite=0x1f`, `lite_dtb=0x29`
 
-The -22 is `qcom_scm_pas_init_image(0x24)` (TZ metadata), raised from
-`qcom_pas_load()` **before** LCX/LMX and XO are enabled. Lite ADSP is already
-up from UEFI. pkgrel 2 moves that init into `qcom_pas_start()` after power,
-shuts down leftover PAS 0x24 / PAS 1 as well as lite, PAGE-aligns the
-metadata DMA buffer, and logs every shutdown errno.
+The -22 is `qcom_scm_pas_init_image(0x24)` (TZ metadata). Lite ADSP is
+already up from UEFI.
 
-See [docs/adsp-22.md](docs/adsp-22.md) and
-`patches/0001-x1e-adsp-dtb-init-after-power.patch`.
+**7.2.2-2 (pkgrel 2)** moved DTB PAS_INIT into `qcom_pas_start()` after
+power, shut down leftover PAS 0x24 / PAS 1 **and lite**, PAGE-aligned
+metadata DMA, and logged every shutdown errno. Result on S5507QA: lite
+shutdown returned 0, PAS 0x24 still -22. TZ will not accept this
+OEM-signed DTB from NS. Battery EAGAIN, no soundcards. CDSP/GPU/SSH fine.
 
-If ADSP still fails after reboot, grab the new `PAS shutdown` dmesg lines.
-`0` on lite/dtb then still `-22` on init means TZ policy (not this sequence).
-A non-zero lite shutdown means TZ will not release UEFI lite ADSP.
+**7.2.2-3 (pkgrel 3)** keeps that sequence except it does **not** kill
+lite until DTB PAS_INIT succeeds. If TZ still rejects 0x24 and the rproc
+has `lite_pas_id`, `start()` attaches to UEFI lite ADSP (return 0 so
+remoteproc goes RUNNING, GLINK/battmgr can attach) instead of failing.
+This is **attach-to-lite fallback, not a TZ signature fix**. Full audio
+ADSP still needs a TZ-accepted DTB (QTI-CASS or qebspil), not another
+DTS change. `aplay -l` will stay empty on lite. Optional cmdline
+`qcom_q6v5_pas.attach_lite_on_dtb_fail=0` restores kill-lite-then-init.
+
+See [docs/adsp-22.md](docs/adsp-22.md). The patch lives at repo root as
+`0001-x1e-adsp-dtb-init-after-power.patch` (makepkg `source=()` basename;
+a copy under `patches/` is optional).
+
+After reboot into `7.2.2-3-aarch64-vivobook`:
+
+```
+dmesg | grep -E 'PAS shutdown|initializing firmware|attaching to'
+cat /sys/class/remoteproc/remoteproc0/state
+cat /sys/class/power_supply/qcom-battmgr-bat/capacity
+aplay -l
+```
 
 ## Build and install (on the Vivobook)
 

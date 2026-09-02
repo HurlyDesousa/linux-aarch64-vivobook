@@ -1,12 +1,34 @@
 From: Code Master <code-master@local>
-Subject: remoteproc: qcom_q6v5_pas: init x1e ADSP DTB after power, shutdown leftover PAS
+Subject: remoteproc: qcom_q6v5_pas: attach to UEFI lite ADSP if DTB PAS_INIT fails
 
-Move ADSP DTB PAS_INIT_IMAGE to after proxy PDs/XO, shutdown leftover
-full PAS ids, and PAGE-align metadata DMA.
+Keep DTB PAS_INIT after proxy PDs/XO and PAGE-aligned metadata DMA.
+Do not shut down lite PAS until DTB init succeeds. If TZ rejects the
+DTB on a rproc that has lite_pas_id, attach to the running UEFI lite
+ADSP so GLINK/battmgr can work instead of failing start.
 
 --- a/drivers/remoteproc/qcom_q6v5_pas.c
 +++ b/drivers/remoteproc/qcom_q6v5_pas.c
-@@ -216,41 +216,27 @@
+@@ -83,6 +83,7 @@
+ 	int dtb_pas_id;
+ 	int lite_pas_id;
+ 	int lite_dtb_pas_id;
++	bool lite_attached;
+ 	unsigned int minidump_id;
+ 	int crash_reason_smem;
+ 	unsigned int smem_host_id;
+@@ -119,6 +120,11 @@
+ 	struct qcom_scm_pas_context *dtb_pas_ctx;
+ };
+ 
++static bool attach_lite_on_dtb_fail = true;
++module_param(attach_lite_on_dtb_fail, bool, 0644);
++MODULE_PARM_DESC(attach_lite_on_dtb_fail,
++		 "Attach to UEFI lite ADSP if DTB PAS_INIT fails (default Y)");
++
+ static void qcom_pas_segment_dump(struct rproc *rproc,
+ 				  struct rproc_dump_segment *segment,
+ 				  void *dest, size_t offset, size_t size)
+@@ -216,41 +222,45 @@
  	return 0;
  }
  
@@ -38,9 +60,10 @@ full PAS ids, and PAGE-align metadata DMA.
 -				pas->dtb_firmware_name, ret);
 -			return ret;
 -		}
-+static int qcom_pas_load(struct rproc *rproc, const struct firmware *fw)
++static bool qcom_pas_try_attach_lite(struct qcom_pas *pas, int dtb_err)
 +{
-+	struct qcom_pas *pas = rproc->priv;
++	if (!attach_lite_on_dtb_fail || !pas->lite_pas_id)
++		return false;
  
 -		ret = qcom_mdt_pas_load(pas->dtb_pas_ctx, pas->dtb_firmware,
 -					pas->dtb_firmware_name, pas->dtb_mem_region,
@@ -48,31 +71,49 @@ full PAS ids, and PAGE-align metadata DMA.
 -		if (ret)
 -			goto release_dtb_metadata;
 -	}
-+	/* Store firmware handle to be used in qcom_pas_start() */
-+	pas->firmware = fw;
++	dev_err(pas->dev,
++		"TZ rejected ADSP DTB (err=%d); attaching to UEFI lite ADSP (PAS 0x%x) so GLINK/battmgr can work\n",
++		dtb_err, pas->lite_pas_id);
++	dev_warn(pas->dev,
++		 "attach-to-lite fallback, not a TZ signature fix; full audio ADSP still needs a TZ-accepted DTB\n");
  
- 	return 0;
--
+-	return 0;
++	pas->lite_attached = true;
++	pas->q6v5.handover_issued = true;
++	pas->firmware = NULL;
+ 
 -release_dtb_metadata:
 -	qcom_scm_pas_metadata_release(pas->dtb_pas_ctx);
 -	release_firmware(pas->dtb_firmware);
--
++	return true;
++}
+ 
 -	return ret;
++static int qcom_pas_load(struct rproc *rproc, const struct firmware *fw)
++{
++	struct qcom_pas *pas = rproc->priv;
++
++	/* Store firmware handle to be used in qcom_pas_start() */
++	pas->firmware = fw;
++
++	return 0;
  }
  
  static void qcom_pas_unmap_carveout(struct rproc *rproc, phys_addr_t mem_phys, size_t size)
-@@ -302,10 +288,35 @@
+@@ -302,10 +312,48 @@
  			goto disable_cx_supply;
  	}
  
 +	/*
 +	 * UEFI starts lite ADSP for charging. Do not PAS_INIT the replacement
-+	 * DTB until proxy PDs and XO are on, and always drop leftover PAS
-+	 * state (including full pas_id / dtb_pas_id, in case this TZ parked
-+	 * lite on those ids).
++	 * DTB until proxy PDs and XO are on. Do not shut down lite until DTB
++	 * PAS_INIT succeeds. attach_lite_on_dtb_fail=0 restores
++	 * kill-lite-then-init.
 +	 */
-+	qcom_pas_try_shutdown(pas, pas->lite_pas_id, "lite");
-+	qcom_pas_try_shutdown(pas, pas->lite_dtb_pas_id, "lite-dtb");
++	if (!attach_lite_on_dtb_fail) {
++		qcom_pas_try_shutdown(pas, pas->lite_pas_id, "lite");
++		qcom_pas_try_shutdown(pas, pas->lite_dtb_pas_id, "lite-dtb");
++	}
 +	qcom_pas_try_shutdown(pas, pas->dtb_pas_id, "dtb");
 +	qcom_pas_try_shutdown(pas, pas->pas_id, "main");
 +
@@ -82,14 +123,25 @@ full PAS ids, and PAGE-align metadata DMA.
 +		if (ret) {
 +			dev_err(pas->dev, "request_firmware failed for %s: %d\n",
 +				pas->dtb_firmware_name, ret);
++			if (qcom_pas_try_attach_lite(pas, ret))
++				return 0;
 +			goto disable_px_supply;
 +		}
 +
 +		ret = qcom_mdt_pas_load(pas->dtb_pas_ctx, pas->dtb_firmware,
 +					pas->dtb_firmware_name, pas->dtb_mem_region,
 +					&pas->dtb_mem_reloc);
-+		if (ret)
-+			goto release_dtb_firmware;
++		if (ret) {
++			release_firmware(pas->dtb_firmware);
++			pas->dtb_firmware = NULL;
++			qcom_scm_pas_metadata_release(pas->dtb_pas_ctx);
++			if (qcom_pas_try_attach_lite(pas, ret))
++				return 0;
++			goto disable_px_supply;
++		}
++
++		qcom_pas_try_shutdown(pas, pas->lite_pas_id, "lite");
++		qcom_pas_try_shutdown(pas, pas->lite_dtb_pas_id, "lite-dtb");
 +
  		ret = qcom_pas_map_carveout(rproc, pas->dtb_mem_phys, pas->dtb_mem_size);
  		if (ret)
@@ -98,7 +150,17 @@ full PAS ids, and PAGE-align metadata DMA.
  
  		ret = qcom_scm_pas_prepare_and_auth_reset(pas->dtb_pas_ctx);
  		if (ret) {
-@@ -347,6 +358,11 @@
+@@ -313,6 +361,9 @@
+ 				"failed to authenticate dtb image and release reset\n");
+ 			goto unmap_dtb_carveout;
+ 		}
++	} else {
++		qcom_pas_try_shutdown(pas, pas->lite_pas_id, "lite");
++		qcom_pas_try_shutdown(pas, pas->lite_dtb_pas_id, "lite-dtb");
+ 	}
+ 
+ 	ret = qcom_mdt_pas_load(pas->pas_ctx, pas->firmware, rproc->firmware,
+@@ -347,6 +398,11 @@
  	/* firmware is used to pass reference from qcom_pas_start(), drop it now */
  	pas->firmware = NULL;
  
@@ -110,7 +172,7 @@ full PAS ids, and PAGE-align metadata DMA.
  	return 0;
  
  unmap_carveout:
-@@ -359,6 +375,12 @@
+@@ -359,6 +415,12 @@
  unmap_dtb_carveout:
  	if (pas->dtb_pas_id)
  		qcom_pas_unmap_carveout(rproc, pas->dtb_mem_phys, pas->dtb_mem_size);
@@ -123,6 +185,22 @@ full PAS ids, and PAGE-align metadata DMA.
  disable_px_supply:
  	if (pas->px_supply)
  		regulator_disable(pas->px_supply);
+@@ -399,6 +461,15 @@
+ 	int handover;
+ 	int ret;
+ 
++	if (pas->lite_attached) {
++		dev_warn(pas->dev,
++			 "leaving UEFI lite ADSP running (skip PAS shutdown)\n");
++		pas->lite_attached = false;
++		/* Drop IRQ interest only; do not kill charging. */
++		qcom_q6v5_unprepare(&pas->q6v5);
++		return 0;
++	}
++
+ 	ret = qcom_q6v5_request_stop(&pas->q6v5, pas->sysmon);
+ 	if (ret == -ETIMEDOUT)
+ 		dev_err(pas->dev, "timed out on wait\n");
 --- a/drivers/firmware/qcom/qcom_scm.c
 +++ b/drivers/firmware/qcom/qcom_scm.c
 @@ -642,8 +642,9 @@
