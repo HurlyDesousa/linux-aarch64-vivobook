@@ -8,6 +8,53 @@ This is **not** the omarchy-iso fork. Native-build on the laptop (X Elite).
 Dual-boots with stock `linux-aarch64`: this package does not Provide `linux`
 and does not Conflict the stock kernel.
 
+## Camera — Phase A (pkgrel 5)
+
+**7.2.2-5 (pkgrel 5)** enables the camera infrastructure on
+x1e80100/Vivobook S15 so CCI I2C adapters can probe after boot.
+No sensor node is wired yet; that is Phase C after CCI is confirmed.
+
+### What was enabled
+
+| Component | Location | Notes |
+|-----------|----------|-------|
+| CAMCC clock controller | `hamoa.dtsi` | `@0xade0000`; needed by CCI+CAMSS for clocks/power |
+| CCI0 I2C adapter | `hamoa.dtsi` | `@0xac15000` IRQ 460; gpio101-104 |
+| CCI1 I2C adapter | `hamoa.dtsi` | `@0xac16000` IRQ 271; gpio105-106 + gpio235-236 (aon_cci) |
+| CAMSS ISP | `hamoa.dtsi` | `@0xacb7000`; v7.2 embedded-CSIPHY legacy binding |
+| CCI pinctrl | `hamoa.dtsi` / tlmm | gpio101-106 `cci_i2c`, gpio235-236 `aon_cci` |
+| Board enable | `x1-asus-vivobook-s15.dtsi` | `&camss`, `&cci0`, `&cci1` status=okay |
+| `CONFIG_VIDEO_OV02C10=m` | `config.vivobook` | Module compiled, NOT bound (no DTS sensor node yet) |
+
+### What is left as TODO / Phase C
+
+- **Sensor node**: OV02C10 @ CCI1 i2c1 0x36 is a **HUNCH** — must be
+  confirmed by `i2cdetect` once CCI adapters appear.
+- **CSIPHY supply regulators**: `vdd-csiphy-0p8-supply` / `1p2-supply`
+  in the board DTS use `vreg_l1d_0p8` / `vreg_l3e_1p2` as guesses (no
+  pm8010 camera PMIC visible in Vivobook DTS).  Verify against BSP
+  schematic before wiring a sensor.
+- **PHY API**: upstream v13 CSIPHY series (Bryan O'Donoghue / Linaro,
+  still under review 2026-07) will replace embedded CSIPHY with
+  separate `csiphy@` nodes; update in a follow-up once merged.
+- **ACPI HID**: OVTI02C1 vs OVTI08X40 still unconfirmed from Vivobook
+  DSDT; not blocking this PR.
+
+### Post-boot checks
+
+```
+# After building and installing 7.2.2-5-aarch64-vivobook:
+ls /sys/class/i2c-adapter/          # new i2c-N entries for CCI0 and CCI1
+dmesg | grep -E 'cci|camss|csiphy|qcom-camss'
+# Phase B: once CCI adapters are confirmed:
+i2cdetect -y <N>                    # look for 0x36 on the CCI1 i2c1 bus
+ls /dev/video*                      # will be empty until Phase C sensor bind
+```
+
+See `0003-x1e80100-vivobook-camera-phase-a.patch` for the full DTS.
+
+---
+
 ## Config diff vs the live 7.2.0-2 kernel
 
 | Symbol | Live 7.2.0-2 | This fragment |
@@ -15,6 +62,7 @@ and does not Conflict the stock kernel.
 | `CONFIG_RESET_GPIO` | unset | **y** (WSA amp reset / unmute after ADSP) |
 | `CONFIG_POWER_RESET_GPIO` | y | unchanged |
 | `CONFIG_VIDEO_QCOM_IRIS` | unset | **m** (needs `qcvss8380.mbn`; decode still needs the module) |
+| `CONFIG_VIDEO_OV02C10` | unset | **m** (Phase A: module compiled, not bound — no sensor DTS yet) |
 | `CONFIG_QCOM_Q6V5_PAS` | m | unchanged |
 | `CONFIG_SND_SOC_SC8280XP` | m | unchanged |
 
