@@ -40,7 +40,7 @@ Signed-off-by: Grokbot <grokbot@s-w.art>
  #include <dt-bindings/clock/qcom,x1e80100-dispcc.h>
  #include <dt-bindings/clock/qcom,x1e80100-gcc.h>
  #include <dt-bindings/clock/qcom,x1e80100-gpucc.h>
-@@ -5550,6 +5551,268 @@
+@@ -5550,6 +5551,267 @@
  			#power-domain-cells = <1>;
  		};
  
@@ -172,7 +172,6 @@ Signed-off-by: Grokbot <grokbot@s-w.art>
 +		 * the board DTS override). They are NOT asserted at probe time,
 +		 * only during active streaming -- safe to provide as guesses
 +		 * for Phase A.
-+		 * ports {} is also supplied by the board DTS override.
 +		 */
 +		camss: isp@acb7000 {
 +			compatible = "qcom,x1e80100-camss";
@@ -393,7 +392,7 @@ Signed-off-by: Grokbot <grokbot@s-w.art>
  				function = "edp0_hot";
 --- a/arch/arm64/boot/dts/qcom/x1-asus-vivobook-s15.dtsi	2026-09-03 22:15:41.465021916 +0000
 +++ b/arch/arm64/boot/dts/qcom/x1-asus-vivobook-s15.dtsi	2026-09-03 22:18:31.867898789 +0000
-@@ -1354,3 +1354,49 @@
+@@ -1354,3 +1354,45 @@
  
  	status = "okay";
  };
@@ -421,10 +420,6 @@ Signed-off-by: Grokbot <grokbot@s-w.art>
 +	/* TODO: replace with verified BSP camera regulator rail names */
 +	vdd-csiphy-0p8-supply = <&vreg_l1d_0p8>;
 +	vdd-csiphy-1p2-supply = <&vreg_l3e_1p2>;
-+
-+	/* Empty ports: no sensor endpoint in Phase A */
-+	ports {};
-+
 +	status = "okay";
 +};
 +
