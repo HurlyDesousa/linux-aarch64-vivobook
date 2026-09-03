@@ -8,7 +8,17 @@ This is **not** the omarchy-iso fork. Native-build on the laptop (X Elite).
 Dual-boots with stock `linux-aarch64`: this package does not Provide `linux`
 and does not Conflict the stock kernel.
 
-## Camera — Phase A (pkgrel 5)
+## Camera — Phase A (pkgrel 6)
+
+**7.2.2-6 (pkgrel 6)** fixes a DTC FATAL introduced by pkgrel 5: the
+`&camss` board overlay in `x1-asus-vivobook-s15.dtsi` contained an empty
+`ports {};` child node listed after property assignments, violating the
+DTC rule that properties must precede subnodes.  The empty `ports {}` was
+removed; the overlay now contains only the three property assignments
+(`vdd-csiphy-0p8-supply`, `vdd-csiphy-1p2-supply`, `status = "okay"`).
+No functional change — `camss` in `hamoa.dtsi` already has no child nodes
+at Phase A; adding an empty overlay `ports {}` served no purpose and
+broke the build.
 
 **7.2.2-5 (pkgrel 5)** enables the camera infrastructure on
 x1e80100/Vivobook S15 so CCI I2C adapters can probe after boot.
@@ -43,7 +53,7 @@ No sensor node is wired yet; that is Phase C after CCI is confirmed.
 ### Post-boot checks
 
 ```
-# After building and installing 7.2.2-5-aarch64-vivobook:
+# After building and installing 7.2.2-6-aarch64-vivobook:
 ls /sys/class/i2c-adapter/          # new i2c-N entries for CCI0 and CCI1
 dmesg | grep -E 'cci|camss|csiphy|qcom-camss'
 # Phase B: once CCI adapters are confirmed:
