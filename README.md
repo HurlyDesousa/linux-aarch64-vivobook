@@ -8,6 +8,69 @@ This is **not** the omarchy-iso fork. Native-build on the laptop (X Elite).
 Dual-boots with stock `linux-aarch64`: this package does not Provide `linux`
 and does not Conflict the stock kernel.
 
+## Camera — Phase B (pkgrel 7)
+
+### Phase B live results (7.2.0-6, pkg 7.2.2-6)
+
+Running `7.2.2-6-aarch64-vivobook` on S5507QA gave these results:
+
+| Device | Status | Notes |
+|--------|--------|-------|
+| `acb7000.isp` (CAMSS) | **BOUND** | video0–15, v4l-subdev0–27, /dev/media0; TPG warn only |
+| `ac15000.cci` (CCI0) | **FAIL -110** | deferred probe timeout; no i2c adapter |
+| `ac16000.cci` (CCI1) | **FAIL -110** | deferred probe timeout; no i2c adapter |
+| `cam_cc_cci_0_clk` | exists @ 19.2MHz, enable=0 | **deviceless** — never claimed |
+| TITAN_TOP GDSC | off | consumers: only `acb7000.isp`; CCI not listed |
+
+### Root cause: GDSC not powered at hardware-init time
+
+On x1e80100, `CAM_CC_TITAN_TOP_GDSC` is controlled **exclusively** through
+the genpd power-domain layer.  Unlike older Qualcomm SoCs (sdm845, sm8450)
+where enabling a clock gate also raises the upstream GDSC, x1e80100 CAMCC
+keeps GDSC control separate.
+
+The v7.2 `i2c-qcom-cci` driver probe calls `cci_enable_clocks()` (opens
+the clock gates) and then immediately writes `CCI_RESET_CMD` to the CCI
+hardware and waits 100 ms for a `RST_DONE_ACK` IRQ.  With TITAN_TOP GDSC
+still off, the hardware is powered down and never responds → timeout →
+`-ETIMEDOUT` (-110).  The device goes through deferred-probe retries and
+eventually the deferred-probe watchdog fires, producing the observed
+`-110 deferred probe timeout`.
+
+**The DTS (clocks / clock-names / power-domains) is correct** and matches
+the upstream Linaro v4 patch series for x1e80100 CCI verbatim.  No DTS
+change is required for the root cause.
+
+### Fix: `0004-i2c-qcom-cci-power-on-gdsc-before-hw-init.patch`
+
+Restructures `cci_probe()` to set up `pm_runtime` **before** the first
+hardware register access:
+
+1. `pm_runtime_set_suspended()` + `pm_runtime_enable()` — arms the
+   pm_runtime engine (which knows about `power-domains` in DTS).
+2. `pm_runtime_resume_and_get()` — genpd raises `CAM_CC_TITAN_TOP_GDSC`
+   through the camcc power-domain provider, then calls
+   `cci_resume_runtime()` → `cci_enable_clocks()` + `cci_init()`.
+3. `cci_reset()` + `cci_init()` run with GDSC **on** — hardware responds,
+   `RST_DONE_ACK` fires, probe continues.
+4. `pm_runtime_mark_last_busy()` + `pm_runtime_put_autosuspend()` — allows
+   the device to auto-suspend after probe (GDSC off when idle).
+5. `cci_xfer()` already calls `pm_runtime_get_sync()` for every transfer,
+   so runtime-resume (GDSC on + clocks on + cci_init) happens correctly.
+
+### Post-boot verification after pkgrel 7
+
+```bash
+# After rebuild+install+reboot into 7.2.2-7-aarch64-vivobook:
+dmesg | grep -E 'cci|camcc'          # expect no -110; CCI bound
+ls /sys/class/i2c-adapter/           # new i2c-N entries for CCI0 (2) and CCI1 (2)
+cat /sys/kernel/debug/clk/cam_cc_cci_0_clk/enable   # expect 0 when idle
+# Optional (confirms TITAN_TOP comes up with CCI):
+i2cdetect -y <N>                     # 0x36 deferred to Phase C
+```
+
+---
+
 ## Camera — Phase A (pkgrel 6)
 
 **7.2.2-6 (pkgrel 6)** fixes a DTC FATAL introduced by pkgrel 5: the
