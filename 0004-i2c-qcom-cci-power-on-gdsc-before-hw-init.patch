@@ -1,0 +1,125 @@
+From: Grokbot <grokbot@s-w.art>
+Subject: i2c: qcom-cci: power on GDSC via pm_runtime before hardware init
+
+On x1e80100 (Snapdragon X Elite) the Camera Clock Controller's
+TITAN_TOP GDSC is not automatically powered up when its downstream
+clock gates are enabled through the clock framework.  The existing
+probe sequence calls cci_enable_clocks() and then accesses hardware
+registers via cci_reset(), which writes CCI_RESET_CMD and waits 100 ms
+for RST_DONE_ACK.  With TITAN_TOP_GDSC still off the hardware never
+responds, cci_reset() returns -ETIMEDOUT (-110), and CCI probes fail.
+
+This has not been a problem on older platforms (sdm845, sm8250, sm8450)
+because those CAMCC drivers wire the GDSC into the clock-enable path:
+enabling any descendant clock also powers the GDSC.  The x1e80100
+CAMCC implementation keeps GDSC control strictly in the power-domain
+(genpd) layer.
+
+Fix: set up pm_runtime BEFORE touching any hardware register, then call
+pm_runtime_resume_and_get() so that genpd raises CAM_CC_TITAN_TOP_GDSC
+through the power-domain provider (camcc) before cci_reset() writes to
+CCI registers.  The existing cci_resume_runtime() callback already does
+cci_enable_clocks() + cci_init(), so clocks and register initialisation
+come up as part of the runtime-resume path.  After the one-time
+cci_reset() + cci_init() sequence in probe is complete, drop the
+pm_runtime reference so the device can auto-suspend when idle.
+
+Error paths are updated to match: all routes that skip i2c_add_adapter()
+must now put the pm_runtime reference and disable pm_runtime (which
+causes cci_suspend_runtime() → cci_disable_clocks() to run).
+
+Signed-off-by: Grokbot <grokbot@s-w.art>
+---
+ drivers/i2c/busses/i2c-qcom-cci.c | 50 ++++++++++++++++++++++--------
+ 1 file changed, 37 insertions(+), 13 deletions(-)
+
+diff --git a/drivers/i2c/busses/i2c-qcom-cci.c b/drivers/i2c/busses/i2c-qcom-cci.c
+--- a/drivers/i2c/busses/i2c-qcom-cci.c
++++ b/drivers/i2c/busses/i2c-qcom-cci.c
+@@ -499,10 +499,29 @@ static int cci_probe(struct platform_device *pdev)
+ 		dev_warn(dev, "Found %lu cci clk rate while %lu was expected\n",
+ 			cci_clk_rate, cci->data->cci_clk_rate);
+ 	}
+-	ret = cci_enable_clocks(cci);
+-	if (ret < 0)
+-		return ret;
+-	/* Interrupt */
++	/*
++	 * Enable pm_runtime *before* any hardware access so that the genpd
++	 * framework powers up the GDSC (e.g. CAM_CC_TITAN_TOP_GDSC on
++	 * x1e80100) via the power-domain provider before cci_reset() writes
++	 * to CCI registers.  On x1e80100 the GDSC is not automatically raised
++	 * by enabling clock gates; without an explicit pm_runtime wakeup the
++	 * hardware remains powered off and cci_reset() times out (-ETIMEDOUT).
++	 *
++	 * cci_resume_runtime() handles cci_enable_clocks() + cci_init(), so
++	 * the direct cci_enable_clocks() call is no longer needed here.
++	 * probe() calls cci_reset() + cci_init() explicitly after resume so
++	 * that the one-time hardware reset occurs in the correct order.
++	 */
++	pm_runtime_set_autosuspend_delay(dev, MSEC_PER_SEC);
++	pm_runtime_use_autosuspend(dev);
++	pm_runtime_set_suspended(dev);
++	pm_runtime_enable(dev);
++	ret = pm_runtime_resume_and_get(dev);
++	if (ret < 0) {
++		pm_runtime_disable(dev);
++		return dev_err_probe(dev, ret, "failed to power on CCI\n");
++	}
++	/* Interrupt - register before cci_reset() which waits for RST_DONE_ACK IRQ */
+ 	ret = platform_get_irq(pdev, 0);
+ 	if (ret < 0)
+-		goto disable_clocks;
++		goto disable_runtime;
+ 	cci->irq = ret;
+ 	ret = devm_request_irq(dev, cci->irq, cci_isr, 0, dev_name(dev), cci);
+ 	if (ret < 0) {
+ 		dev_err(dev, "request_irq failed, ret: %d\n", ret);
+-		goto disable_clocks;
++		goto disable_runtime;
+ 	}
+ 	val = readl(cci->base + CCI_HW_VERSION);
+ 	dev_dbg(dev, "CCI HW version = 0x%08x", val);
+ 	ret = cci_reset(cci);
+ 	if (ret < 0)
+-		goto error;
++		goto disable_irq;
+ 	ret = cci_init(cci);
+ 	if (ret < 0)
+-		goto error;
+-	pm_runtime_set_autosuspend_delay(dev, MSEC_PER_SEC);
+-	pm_runtime_use_autosuspend(dev);
+-	pm_runtime_set_active(dev);
+-	pm_runtime_enable(dev);
++		goto disable_irq;
+ 	for (i = 0; i < cci->data->num_masters; i++) {
+ 		if (!cci->master[i].cci)
+ 			continue;
+@@ -537,18 +556,24 @@ static int cci_probe(struct platform_device *pdev)
+ 			goto error_i2c;
+ 		}
+ 	}
++	pm_runtime_mark_last_busy(dev);
++	pm_runtime_put_autosuspend(dev);
+ 	return 0;
+ 
+ error_i2c:
+-	pm_runtime_disable(dev);
+ 	pm_runtime_dont_use_autosuspend(dev);
+ 	for (--i ; i >= 0; i--) {
+ 		if (cci->master[i].cci) {
+ 			i2c_del_adapter(&cci->master[i].adap);
+ 			of_node_put(cci->master[i].adap.dev.of_node);
+ 		}
+ 	}
+-error:
+-	disable_irq(cci->irq);
+-disable_clocks:
+-	cci_disable_clocks(cci);
++disable_irq:
++	disable_irq(cci->irq);
++disable_runtime:
++	pm_runtime_put_sync(dev);
++	pm_runtime_disable(dev);
+ 	return ret;
+ }
