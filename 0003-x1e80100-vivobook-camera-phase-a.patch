@@ -1,0 +1,445 @@
+From: Grokbot <grokbot@s-w.art>
+Subject: arm64: dts: qcom: x1e80100/vivobook-s15: enable CAMCC + CCI + CAMSS (Phase A)
+
+Add the minimal camera infrastructure to let CCI I2C adapters appear
+after boot on the ASUS Vivobook S15 S5507QA (x1e80100).
+
+Phase A scope -- no sensor node, no endpoint wiring:
+  * hamoa.dtsi: CAMCC clock controller, CCI0/CCI1 I2C adapters,
+    CAMSS ISP block (legacy embedded-CSIPHY, v7.2 binding), CCI
+    pinctrl states (gpio101-106, gpio235-236 for aon_cci).
+  * x1-asus-vivobook-s15.dtsi: enable &camss with guessed CSIPHY
+    supply regulators (see TODO), enable &cci0 and &cci1.
+
+DTS data sources (all from upstream patch series still under review):
+  - CAMCC: "arm64: dts: qcom: x1e80100: Add CAMCC block definition"
+    Bryan O'Donoghue / Linaro, 2026-02-26 (v1 / v2 2026-03-16)
+  - CCI: "arm64: dts: qcom: x1e80100: Add CCI definitions"
+    same series, v2 2026-03-16 (LKML thread 20260316)
+  - CAMSS: qcom,x1e80100-camss.yaml binding example in kernel v7.2
+
+HUNCH: vdd-csiphy-{0p8,1p2}-supply in the board DTS use
+vreg_l1d_0p8 / vreg_l3e_1p2 (available Vivobook PMIC rails) as
+guesses. Peer boards (Yoga Slim 7x, T14s) use a pm8010 camera PMIC;
+the Vivobook S15 board DTS has no pm8010. These regulators are only
+asserted during streaming, NOT at probe -- safe for Phase A.
+
+Post-boot checks (after someone builds and installs this kernel):
+  ls /sys/class/i2c-adapter/         # expect new i2c-N for CCI
+  dmesg | grep -E 'cci|camss|csiphy'
+  i2cdetect -y <N>                   # 0x36 check deferred to Phase C
+
+Signed-off-by: Grokbot <grokbot@s-w.art>
+--- a/arch/arm64/boot/dts/qcom/hamoa.dtsi	2026-09-03 22:15:41.461021937 +0000
++++ b/arch/arm64/boot/dts/qcom/hamoa.dtsi	2026-09-03 22:18:14.424030323 +0000
+@@ -6,6 +6,7 @@
+ #include <dt-bindings/clock/qcom,rpmh.h>
+ #include <dt-bindings/clock/qcom,sc8280xp-lpasscc.h>
+ #include <dt-bindings/clock/qcom,sm8450-videocc.h>
++#include <dt-bindings/clock/qcom,x1e80100-camcc.h>
+ #include <dt-bindings/clock/qcom,x1e80100-dispcc.h>
+ #include <dt-bindings/clock/qcom,x1e80100-gcc.h>
+ #include <dt-bindings/clock/qcom,x1e80100-gpucc.h>
+@@ -5550,6 +5551,268 @@
+ 			#power-domain-cells = <1>;
+ 		};
+ 
++		/*
++		 * Camera Clock Controller -- Phase A (2026).
++		 * Source: upstream patch series "arm64: dts: qcom: x1e80100:
++		 * Add CAMCC block definition" (Bryan O'Donoghue / Linaro,
++		 * 2026-02-26, under review as of kernel v7.2).
++		 */
++		camcc: clock-controller@ade0000 {
++			compatible = "qcom,x1e80100-camcc";
++			reg = <0 0x0ade0000 0 0x20000>;
++			clocks = <&gcc GCC_CAMERA_AHB_CLK>,
++				 <&bi_tcxo_div2>,
++				 <&bi_tcxo_ao_div2>,
++				 <&sleep_clk>;
++			power-domains = <&rpmhpd RPMHPD_MXC>,
++					<&rpmhpd RPMHPD_MMCX>;
++			required-opps = <&rpmhpd_opp_low_svs>,
++					<&rpmhpd_opp_low_svs>;
++			#clock-cells = <1>;
++			#reset-cells = <1>;
++			#power-domain-cells = <1>;
++		};
++
++		/*
++		 * Camera Control Interface (CCI) -- Phase A (2026).
++		 * Register addresses and IRQs from upstream patch series
++		 * "arm64: dts: qcom: x1e80100: Add CCI definitions"
++		 * (Bryan O'Donoghue / Linaro, v2 2026-03-16, under review).
++		 *   CCI0 @ 0x0ac15000  IRQ SPI 460
++		 *   CCI1 @ 0x0ac16000  IRQ SPI 271
++		 * Compatible: "qcom,x1e80100-cci" is not yet in the v7.2
++		 * driver match table; "qcom,msm8996-cci" selects the correct
++		 * cci_v2_data structure as the fallback.
++		 * GPIO pin assignments (from same upstream patch series):
++		 *   CCI0 i2c0: sda=gpio101 scl=gpio102  (function cci_i2c)
++		 *   CCI0 i2c1: sda=gpio103 scl=gpio104  (function cci_i2c)
++		 *   CCI1 i2c0: sda=gpio105 scl=gpio106  (function cci_i2c)
++		 *   CCI1 i2c1: sda=gpio235 scl=gpio236  (function aon_cci)
++		 */
++		cci0: cci@ac15000 {
++			compatible = "qcom,x1e80100-cci", "qcom,msm8996-cci";
++			reg = <0 0x0ac15000 0 0x1000>;
++
++			interrupts = <GIC_SPI 460 IRQ_TYPE_EDGE_RISING>;
++
++			clocks = <&camcc CAM_CC_CAMNOC_AXI_RT_CLK>,
++				 <&camcc CAM_CC_CPAS_AHB_CLK>,
++				 <&camcc CAM_CC_CCI_0_CLK>;
++			clock-names = "camnoc_axi",
++				      "cpas_ahb",
++				      "cci";
++
++			power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
++
++			pinctrl-0 = <&cci0_default>;
++			pinctrl-1 = <&cci0_sleep>;
++			pinctrl-names = "default", "sleep";
++
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			status = "disabled";
++
++			cci0_i2c0: i2c-bus@0 {
++				reg = <0>;
++				clock-frequency = <1000000>;
++				#address-cells = <1>;
++				#size-cells = <0>;
++			};
++
++			cci0_i2c1: i2c-bus@1 {
++				reg = <1>;
++				clock-frequency = <1000000>;
++				#address-cells = <1>;
++				#size-cells = <0>;
++			};
++		};
++
++		cci1: cci@ac16000 {
++			compatible = "qcom,x1e80100-cci", "qcom,msm8996-cci";
++			reg = <0 0x0ac16000 0 0x1000>;
++
++			interrupts = <GIC_SPI 271 IRQ_TYPE_EDGE_RISING>;
++
++			clocks = <&camcc CAM_CC_CAMNOC_AXI_RT_CLK>,
++				 <&camcc CAM_CC_CPAS_AHB_CLK>,
++				 <&camcc CAM_CC_CCI_1_CLK>;
++			clock-names = "camnoc_axi",
++				      "cpas_ahb",
++				      "cci";
++
++			power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
++
++			pinctrl-0 = <&cci1_default>;
++			pinctrl-1 = <&cci1_sleep>;
++			pinctrl-names = "default", "sleep";
++
++			#address-cells = <1>;
++			#size-cells = <0>;
++
++			status = "disabled";
++
++			cci1_i2c0: i2c-bus@0 {
++				reg = <0>;
++				clock-frequency = <1000000>;
++				#address-cells = <1>;
++				#size-cells = <0>;
++			};
++
++			cci1_i2c1: i2c-bus@1 {
++				reg = <1>;
++				clock-frequency = <1000000>;
++				#address-cells = <1>;
++				#size-cells = <0>;
++			};
++		};
++
++		/*
++		 * CAMSS -- Camera Subsystem (Phase A, v7.2 legacy binding).
++		 * Register map and clocks from the qcom,x1e80100-camss.yaml
++		 * binding example shipped in kernel v7.2 (embedded-CSIPHY
++		 * approach). The upstream v13 PHY API series converts CSIPHYs
++		 * to separate nodes; that series is still under review 2026-07.
++		 * For v7.2 the driver uses the inline legacy PHY data.
++		 *
++		 * vdd-csiphy-{0p8,1p2}-supply are board-specific (added in
++		 * the board DTS override). They are NOT asserted at probe time,
++		 * only during active streaming -- safe to provide as guesses
++		 * for Phase A.
++		 * ports {} is also supplied by the board DTS override.
++		 */
++		camss: isp@acb7000 {
++			compatible = "qcom,x1e80100-camss";
++
++			reg = <0 0x0acb7000 0 0x2000>,
++			      <0 0x0acb9000 0 0x2000>,
++			      <0 0x0acbb000 0 0x2000>,
++			      <0 0x0acc6000 0 0x1000>,
++			      <0 0x0acca000 0 0x1000>,
++			      <0 0x0acb6000 0 0x1000>,
++			      <0 0x0ace4000 0 0x1000>,
++			      <0 0x0ace6000 0 0x1000>,
++			      <0 0x0ace8000 0 0x1000>,
++			      <0 0x0acec000 0 0x4000>,
++			      <0 0x0acf6000 0 0x1000>,
++			      <0 0x0acf7000 0 0x1000>,
++			      <0 0x0acf8000 0 0x1000>,
++			      <0 0x0ac62000 0 0x4000>,
++			      <0 0x0ac71000 0 0x4000>,
++			      <0 0x0acc7000 0 0x2000>,
++			      <0 0x0accb000 0 0x2000>;
++
++			reg-names = "csid0", "csid1", "csid2",
++				    "csid_lite0", "csid_lite1",
++				    "csid_wrapper",
++				    "csiphy0", "csiphy1", "csiphy2", "csiphy4",
++				    "csitpg0", "csitpg1", "csitpg2",
++				    "vfe0", "vfe1",
++				    "vfe_lite0", "vfe_lite1";
++
++			clocks = <&camcc CAM_CC_CAMNOC_AXI_NRT_CLK>,
++				 <&camcc CAM_CC_CAMNOC_AXI_RT_CLK>,
++				 <&camcc CAM_CC_CORE_AHB_CLK>,
++				 <&camcc CAM_CC_CPAS_AHB_CLK>,
++				 <&camcc CAM_CC_CPAS_FAST_AHB_CLK>,
++				 <&camcc CAM_CC_CPAS_IFE_0_CLK>,
++				 <&camcc CAM_CC_CPAS_IFE_1_CLK>,
++				 <&camcc CAM_CC_CPAS_IFE_LITE_CLK>,
++				 <&camcc CAM_CC_CPHY_RX_CLK_SRC>,
++				 <&camcc CAM_CC_CSID_CLK>,
++				 <&camcc CAM_CC_CSID_CSIPHY_RX_CLK>,
++				 <&camcc CAM_CC_CSIPHY0_CLK>,
++				 <&camcc CAM_CC_CSI0PHYTIMER_CLK>,
++				 <&camcc CAM_CC_CSIPHY1_CLK>,
++				 <&camcc CAM_CC_CSI1PHYTIMER_CLK>,
++				 <&camcc CAM_CC_CSIPHY2_CLK>,
++				 <&camcc CAM_CC_CSI2PHYTIMER_CLK>,
++				 <&camcc CAM_CC_CSIPHY4_CLK>,
++				 <&camcc CAM_CC_CSI4PHYTIMER_CLK>,
++				 <&gcc GCC_CAMERA_HF_AXI_CLK>,
++				 <&gcc GCC_CAMERA_SF_AXI_CLK>,
++				 <&camcc CAM_CC_IFE_0_CLK>,
++				 <&camcc CAM_CC_IFE_0_FAST_AHB_CLK>,
++				 <&camcc CAM_CC_IFE_1_CLK>,
++				 <&camcc CAM_CC_IFE_1_FAST_AHB_CLK>,
++				 <&camcc CAM_CC_IFE_LITE_CLK>,
++				 <&camcc CAM_CC_IFE_LITE_AHB_CLK>,
++				 <&camcc CAM_CC_IFE_LITE_CPHY_RX_CLK>,
++				 <&camcc CAM_CC_IFE_LITE_CSID_CLK>;
++
++			clock-names = "camnoc_nrt_axi", "camnoc_rt_axi",
++				      "core_ahb", "cpas_ahb", "cpas_fast_ahb",
++				      "cpas_vfe0", "cpas_vfe1", "cpas_vfe_lite",
++				      "cphy_rx_clk_src", "csid", "csid_csiphy_rx",
++				      "csiphy0", "csiphy0_timer",
++				      "csiphy1", "csiphy1_timer",
++				      "csiphy2", "csiphy2_timer",
++				      "csiphy4", "csiphy4_timer",
++				      "gcc_axi_hf", "gcc_axi_sf",
++				      "vfe0", "vfe0_fast_ahb",
++				      "vfe1", "vfe1_fast_ahb",
++				      "vfe_lite", "vfe_lite_ahb",
++				      "vfe_lite_cphy_rx", "vfe_lite_csid";
++
++			interrupts = <GIC_SPI 464 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 466 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 431 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 468 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 359 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 477 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 478 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 479 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 122 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 465 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 467 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 469 IRQ_TYPE_EDGE_RISING>,
++				     <GIC_SPI 360 IRQ_TYPE_EDGE_RISING>;
++
++			interrupt-names = "csid0", "csid1", "csid2",
++					  "csid_lite0", "csid_lite1",
++					  "csiphy0", "csiphy1", "csiphy2", "csiphy4",
++					  "vfe0", "vfe1",
++					  "vfe_lite0", "vfe_lite1";
++
++			interconnects = <&gem_noc MASTER_APPSS_PROC
++					 QCOM_ICC_TAG_ACTIVE_ONLY
++					 &config_noc SLAVE_CAMERA_CFG
++					 QCOM_ICC_TAG_ACTIVE_ONLY>,
++					<&mmss_noc MASTER_CAMNOC_HF
++					 QCOM_ICC_TAG_ALWAYS
++					 &mc_virt SLAVE_EBI1
++					 QCOM_ICC_TAG_ALWAYS>,
++					<&mmss_noc MASTER_CAMNOC_SF
++					 QCOM_ICC_TAG_ALWAYS
++					 &mc_virt SLAVE_EBI1
++					 QCOM_ICC_TAG_ALWAYS>,
++					<&mmss_noc MASTER_CAMNOC_ICP
++					 QCOM_ICC_TAG_ALWAYS
++					 &mc_virt SLAVE_EBI1
++					 QCOM_ICC_TAG_ALWAYS>;
++
++			interconnect-names = "ahb", "hf_mnoc",
++					     "sf_mnoc", "sf_icp_mnoc";
++
++			iommus = <&apps_smmu 0x800 0x60>,
++				 <&apps_smmu 0x860 0x60>,
++				 <&apps_smmu 0x1800 0x60>,
++				 <&apps_smmu 0x1860 0x60>,
++				 <&apps_smmu 0x18e0 0x00>,
++				 <&apps_smmu 0x1980 0x20>,
++				 <&apps_smmu 0x1900 0x00>,
++				 <&apps_smmu 0x19a0 0x20>;
++
++			power-domains = <&camcc CAM_CC_IFE_0_GDSC>,
++					<&camcc CAM_CC_IFE_1_GDSC>,
++					<&camcc CAM_CC_TITAN_TOP_GDSC>;
++
++			power-domain-names = "ife0", "ife1", "top";
++
++			status = "disabled";
++		};
++
++
+ 		mdss: display-subsystem@ae00000 {
+ 			compatible = "qcom,x1e80100-mdss";
+ 			reg = <0 0x0ae00000 0 0x1000>;
+@@ -6131,6 +6394,81 @@
+ 			gpio-ranges = <&tlmm 0 0 239>;
+ 			wakeup-parent = <&pdc>;
+ 
++
++			/*
++			 * CCI I2C pinctrl -- Phase A (2026).
++			 * GPIO pin assignments from upstream patch series
++			 * "arm64: dts: qcom: x1e80100: Add CCI definitions"
++			 * (Bryan O'Donoghue / Linaro, v2 2026-03-16).
++			 */
++			cci0_default: cci0-default-state {
++				cci0_i2c0_default: cci0-i2c0-default-pins {
++					/* cci_i2c_sda0, cci_i2c_scl0 */
++					pins = "gpio101", "gpio102";
++					function = "cci_i2c";
++					drive-strength = <2>;
++					bias-pull-up;
++				};
++
++				cci0_i2c1_default: cci0-i2c1-default-pins {
++					/* cci_i2c_sda1, cci_i2c_scl1 */
++					pins = "gpio103", "gpio104";
++					function = "cci_i2c";
++					drive-strength = <2>;
++					bias-pull-up;
++				};
++			};
++
++			cci0_sleep: cci0-sleep-state {
++				cci0_i2c0_sleep: cci0-i2c0-sleep-pins {
++					pins = "gpio101", "gpio102";
++					function = "cci_i2c";
++					drive-strength = <2>;
++					bias-pull-down;
++				};
++
++				cci0_i2c1_sleep: cci0-i2c1-sleep-pins {
++					pins = "gpio103", "gpio104";
++					function = "cci_i2c";
++					drive-strength = <2>;
++					bias-pull-down;
++				};
++			};
++
++			cci1_default: cci1-default-state {
++				cci1_i2c0_default: cci1-i2c0-default-pins {
++					/* cci_i2c_sda2, cci_i2c_scl2 */
++					pins = "gpio105", "gpio106";
++					function = "cci_i2c";
++					drive-strength = <2>;
++					bias-pull-up;
++				};
++
++				cci1_i2c1_default: cci1-i2c1-default-pins {
++					/* aon_cci_i2c_sda3, aon_cci_i2c_scl3 */
++					pins = "gpio235", "gpio236";
++					function = "aon_cci";
++					drive-strength = <2>;
++					bias-pull-up;
++				};
++			};
++
++			cci1_sleep: cci1-sleep-state {
++				cci1_i2c0_sleep: cci1-i2c0-sleep-pins {
++					pins = "gpio105", "gpio106";
++					function = "cci_i2c";
++					drive-strength = <2>;
++					bias-pull-down;
++				};
++
++				cci1_i2c1_sleep: cci1-i2c1-sleep-pins {
++					pins = "gpio235", "gpio236";
++					function = "aon_cci";
++					drive-strength = <2>;
++					bias-pull-down;
++				};
++			};
++
+ 			edp0_hpd_default: edp0-hpd-default-state {
+ 				pins = "gpio119";
+ 				function = "edp0_hot";
+--- a/arch/arm64/boot/dts/qcom/x1-asus-vivobook-s15.dtsi	2026-09-03 22:15:41.465021916 +0000
++++ b/arch/arm64/boot/dts/qcom/x1-asus-vivobook-s15.dtsi	2026-09-03 22:18:31.867898789 +0000
+@@ -1354,3 +1354,49 @@
+ 
+ 	status = "okay";
+ };
++
++/*
++ * Camera Phase A -- CAMSS + CCI enabled, no sensor node.
++ *
++ * HUNCH / TODO: vdd-csiphy supplies are guesses from available Vivobook
++ * PMIC rails. Peer boards (Yoga Slim 7x, T14s) use a pm8010 camera PMIC;
++ * the Vivobook S15 DTS has no pm8010.
++ *   vreg_l1d_0p8 = ldo1 of pmc8380_d  (880-920 mV)  -> 0.8V CSIPHY rail
++ *   vreg_l3e_1p2 = ldo3 of pmc8380_e  (1.2 V)       -> 1.2V CSIPHY rail
++ * Must verify against ASUS BSP schematic before Phase C (sensor enable).
++ * Safe for Phase A: CSIPHY regulators only asserted during streaming.
++ *
++ * CCI1 is enabled (OV02C10 front camera expected on CCI1 i2c1 @ 0x36 --
++ * this is a HUNCH, pending post-boot i2cdetect once CCI adapters appear).
++ * CCI0 is also enabled; sensor assignment unknown at this stage.
++ *
++ * Post-boot verification:
++ *   ls /sys/class/i2c-adapter/
++ *   dmesg | grep -E 'cci|camss|csiphy|qcom-camss'
++ */
++&camss {
++	/* TODO: replace with verified BSP camera regulator rail names */
++	vdd-csiphy-0p8-supply = <&vreg_l1d_0p8>;
++	vdd-csiphy-1p2-supply = <&vreg_l3e_1p2>;
++
++	/* Empty ports: no sensor endpoint in Phase A */
++	ports {};
++
++	status = "okay";
++};
++
++&cci0 {
++	pinctrl-0 = <&cci0_default>;
++	pinctrl-1 = <&cci0_sleep>;
++	pinctrl-names = "default", "sleep";
++
++	status = "okay";
++};
++
++&cci1 {
++	pinctrl-0 = <&cci1_default>;
++	pinctrl-1 = <&cci1_sleep>;
++	pinctrl-names = "default", "sleep";
++
++	status = "okay";
++};
