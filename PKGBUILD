@@ -10,7 +10,7 @@ _alarmrel=2
 _srcname=linux-7.2
 _desc="AArch64 Vivobook S15 (x1e80100)"
 pkgver=${_alarmver}
-pkgrel=8
+pkgrel=9
 arch=('aarch64')
 url="https://github.com/HurlyDesousa/linux-aarch64-vivobook"
 license=('GPL-2.0-only')
@@ -65,10 +65,10 @@ prepare() {
   git apply ../0003-Revert-arm64-dts-rockchip-Move-rk3568-PCIe3-MSI-to-u.patch
   git apply ../0004-serial-amba-pl011-add-arm-pl011-axi-binding-for-RP1.patch
   git apply ../0005-arm64-dts-rpi5-add-RP1-UART0-GPIO14-15-console.patch
-  git apply --verbose "${srcdir}/0001-x1e-adsp-dtb-init-after-power.patch"
-  git apply --verbose "${srcdir}/0002-qcom-battmgr-capacity-from-energy.patch"
-  git apply --verbose "${srcdir}/0003-x1e80100-vivobook-camera-phase-a.patch"
-  git apply --verbose "${srcdir}/0004-i2c-qcom-cci-power-on-gdsc-before-hw-init.patch"
+  patch -p1 --forward --batch < "${srcdir}/0001-x1e-adsp-dtb-init-after-power.patch"
+  patch -p1 --forward --batch < "${srcdir}/0002-qcom-battmgr-capacity-from-energy.patch"
+  patch -p1 --forward --batch < "${srcdir}/0003-x1e80100-vivobook-camera-phase-a.patch"
+  patch -p1 --forward --batch < "${srcdir}/0004-i2c-qcom-cci-power-on-gdsc-before-hw-init.patch"
 
   cat "${srcdir}/config" > ./.config
   ./scripts/kconfig/merge_config.sh -m .config "${srcdir}/config.vivobook"
