@@ -728,8 +728,10 @@ main only. REUSE_PARTIAL already kept 0x24 and NS `PAS_INIT` of
 dtbloader + ALWAYS_START + Found-remoteproc + **no-reuse PAS dump**
 are **done**. USB `/firmware` MATCH is **closed**. pkgrel 11 held.
 **HOLD** `attach_running_main`. No kernel install. ConOut photo is
-**retired**. The INIT vs AUTH gate is the patched ALWAYS_START
-`qebspilaa64.efi` in [qebspil/](../qebspil/).
+**retired**. The 72634c6 file+NV logger never persisted `pil_finish`
+stages (FAT/NV down at EBS). The INIT vs AUTH gate is the
+**ebs-efivar-ram** ALWAYS_START `qebspilaa64.efi` in
+[qebspil/](../qebspil/).
 
 ### Primary: copy the prebuilt EFI onto the live stick
 
@@ -738,13 +740,18 @@ cp qebspil/qebspilaa64.efi /path/to/that/volume/qebspilaa64.efi
 ```
 
 Same USB/ESP that already has dtbloader + MATCH firmware. After
-that file is staged, the next time the machine is up (no photo):
+that file is staged, the next time the machine is up (no photo,
+no ConOut): paste **efivar only**.
 
 ```
+# GUID 6b7c0a11-24e1-4a01-9e80-11ad50010024 — skip 4-byte attr prefix
 dd if=/sys/firmware/efi/efivars/QebspilAdsp-6b7c0a11-24e1-4a01-9e80-11ad50010024 \
    bs=1 skip=4 status=none; echo
-cat /qebspil-adsp.log
 ```
+
+Look for `ebs-efivar-ram build` then `late-EBS enter` then
+`[MAIN] pas=0x1 stage=INIT|AUTH`. Do **not** `cat /qebspil-adsp.log`
+(FAT is down at EBS; that file is load-time only).
 
 | log (`[MAIN] pas=0x1 stage=…`) | meaning | vs LIVE |
 |----------|---------|---------|
@@ -792,8 +799,7 @@ later audio/GLINK problem, not another PAS_INIT of the OEM MBN.
 - Do **not** claim another NS `PAS_INIT` kernel tweak publishes
   `EfiDtbTableGuid` or AUTHs 0x1. Do **not** bump pkgrel.
 - Do **not** fork Limine or patch qebspil TPL / Stall. The
-  main-fail **file + efivar** patch in `qebspil/` is the
-  justified edit.
+  ebs-efivar-ram patch in `qebspil/` is the justified edit.
 - A full remoteproc-core `RPROC_DETACHED` / Gerhold
   `wip/x1e80100-6.16-el2` backport is the upstream-shaped late-attach;
   pkgrel 11 is the 7.2-sized landing pad for the same moment (main

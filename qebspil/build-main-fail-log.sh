@@ -1,5 +1,5 @@
 #!/bin/sh
-# Rebuild ALWAYS_START qebspil + main-fail file/efivar log.
+# Rebuild ALWAYS_START qebspil + late-EBS efivar-ram log (no FAT at EBS).
 # Native aarch64: omit CROSS_COMPILE. Cross: aarch64-linux-gnu-.
 set -eu
 PIN=8e4d9e676a3b3afe136cda9b953a2139ff1a32d0
