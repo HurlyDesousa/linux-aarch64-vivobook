@@ -26,25 +26,27 @@ index 294395e..4e40343 100644
  
 diff --git a/src/log.c b/src/log.c
 new file mode 100644
-index 0000000..e10b661
+index 0000000..da796ef
 --- /dev/null
 +++ b/src/log.c
-@@ -0,0 +1,203 @@
+@@ -0,0 +1,202 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Persist pil_finish stages so Omarchy can read INIT vs AUTH without ConOut.
 + *
-+ * LIVE on tip 72634c6: QebspilAdsp and USB \qebspil-adsp.log were identical
-+ * load-time Firmware-path lines only — no [MAIN] stage=INIT|AUTH. Late EBS
-+ * still AUTH'd DTB (PAS 0x24:0). So pil_finish ran, but persist did not.
++ * LIVE 72634c6: QebspilAdsp == USB log (931 B) — only load-time Firmware
++ * path lines (repeated once). No stage=INIT|AUTH. Paths/carveouts sane.
++ * Late EBS still AUTH'd DTB (0x24:0). pil_finish ran; persist did not.
 + *
-+ * Why: persist used NON_VOLATILE SetVariable (SPI / FTW) and then FAT
-+ * LibOpenRoot + Print. At late ExitBootServices those are already gone or
-+ * refused (Insyde 2.9). Load-time NV+FAT writes worked; EBS ones did not.
++ * Why NV SetVariable fails at EBS: persist *grew* the var (931 B →
++ * stages). That realloc needs SPI/FTW, already down on Insyde 2.9, plus
++ * FAT LibOpenRoot + Print. #14 then deleted the NV var and recreated it
++ * volatile (loglen-sized) — after EBS volatile is read-only / may vanish,
++ * and a growing write still needs a new store slot.
 + *
-+ * Fix: RAM-backed Runtime variable (no NON_VOLATILE) as the primary write
-+ * at EBS — no flash, no FAT, no ConOut. Same name+GUID QebspilAdsp.
-+ * Linux: dd if=.../QebspilAdsp-<guid> bs=1 skip=4
++ * Fix: keep QebspilAdsp NV|BS|RT (Linux visibility proven). At load,
++ * create it at a fixed 4 KiB. Every persist, including late EBS, is an
++ * in-place same-size update — no FTW realloc, no FAT, no ConOut.
 + */
 +
 +#include <stdarg.h>
@@ -56,6 +58,7 @@ index 0000000..e10b661
 +
 +#define LOG_PATH u"\\qebspil-adsp.log"
 +#define LOG_MAX 4096
++#define EBS_MAX 256
 +#define LOG_ATTR_RAM (EFI_VARIABLE_BOOTSERVICE_ACCESS | \
 +		      EFI_VARIABLE_RUNTIME_ACCESS)
 +#define LOG_ATTR_NV  (EFI_VARIABLE_NON_VOLATILE | LOG_ATTR_RAM)
@@ -65,7 +68,7 @@ index 0000000..e10b661
 +static UINTN loglen;
 +static BOOLEAN log_ebs;
 +static BOOLEAN log_ready;
-+static EFI_PHYSICAL_ADDRESS logbuf_phys;
++static CHAR8 ebs_slot[EBS_MAX];
 +
 +static EFI_GUID qebspil_log_guid = {
 +	0x6b7c0a11, 0x24e1, 0x4a01,
@@ -85,22 +88,13 @@ index 0000000..e10b661
 +	if (log_ready)
 +		return;
 +
-+	/*
-+	 * RuntimeServicesData survives EBS if the .efi image (bsdrv) is
-+	 * reclaimed. Identity-mapped at AllocatePool time → phys == virt.
-+	 */
 +	st = BS->AllocatePool(EfiRuntimeServicesData, LOG_MAX, &p);
 +	if (!EFI_ERROR(st) && p) {
-+		CopyMem(p, static_logbuf, loglen + 1);
++		SetMem(p, LOG_MAX, 0);
++		if (loglen)
++			CopyMem(p, static_logbuf, loglen + 1);
 +		logbuf = p;
-+		logbuf_phys = (EFI_PHYSICAL_ADDRESS)(UINTN)p;
-+	} else {
-+		logbuf_phys = (EFI_PHYSICAL_ADDRESS)(UINTN)static_logbuf;
 +	}
-+
-+	/* Drop leftover NV QebspilAdsp from 72634c6 (attr mismatch). */
-+	RT->SetVariable(u"QebspilAdsp", &qebspil_log_guid, 0, 0, NULL);
-+	RT->SetVariable(u"QebspilAdsp", &qebspil_log_guid, LOG_ATTR_NV, 0, NULL);
 +
 +	log_ready = TRUE;
 +}
@@ -119,7 +113,6 @@ index 0000000..e10b661
 +		logbuf[loglen] = 0;
 +	}
 +
-+	/* ConOut often stalls once EBS is in flight — never Print then. */
 +	if (!log_ebs)
 +		Print(u"%a\n", line);
 +}
@@ -135,21 +128,36 @@ index 0000000..e10b661
 +	qebspil_log((const char *)line);
 +}
 +
-+static UINTN log_ascii(CHAR8 *buf, UINTN sz, const char *fmt, ...)
-+{
-+	va_list ap;
-+	UINTN n;
-+
-+	va_start(ap, fmt);
-+	n = AsciiVSPrint(buf, sz, (const CHAR8 *)fmt, ap);
-+	va_end(ap);
-+	return n;
-+}
-+
 +static EFI_STATUS log_set_named(const CHAR16 *name, UINT32 attr,
 +				UINTN size, VOID *data)
 +{
 +	return RT->SetVariable((CHAR16 *)name, &qebspil_log_guid, attr, size, data);
++}
++
++/*
++ * Always write a fixed-size slot so EBS is an in-place update of a var
++ * that already exists (created at load, when FTW still works).
++ */
++static EFI_STATUS log_set_fixed(const CHAR16 *name, CHAR8 *slot, UINTN cap,
++				const CHAR8 *src, UINTN srclen)
++{
++	EFI_STATUS st;
++	UINTN n = srclen;
++
++	if (n > cap)
++		n = cap;
++	if (slot != src) {
++		SetMem(slot, cap, 0);
++		if (n)
++			CopyMem(slot, (VOID *)src, n);
++	} else if (n < cap) {
++		SetMem(slot + n, cap - n, 0);
++	}
++
++	st = log_set_named(name, LOG_ATTR_NV, cap, slot);
++	if (EFI_ERROR(st))
++		st = log_set_named(name, LOG_ATTR_RAM, cap, slot);
++	return st;
 +}
 +
 +static void log_set_last_line(void)
@@ -164,8 +172,7 @@ index 0000000..e10b661
 +	n = loglen - start;
 +	if (n && logbuf[start + n - 1] == '\n')
 +		n--;
-+	/* Compact last-stage var — smaller write if the full buffer is refused. */
-+	log_set_named(u"QebspilEbs", LOG_ATTR_RAM, n, logbuf + start);
++	log_set_fixed(u"QebspilEbs", ebs_slot, EBS_MAX, logbuf + start, n);
 +}
 +
 +static void log_persist_file(void)
@@ -203,8 +210,6 @@ index 0000000..e10b661
 +void qebspil_log_persist(void)
 +{
 +	EFI_STATUS st;
-+	CHAR8 ptr[80];
-+	UINTN ptrlen;
 +
 +	if (!loglen)
 +		return;
@@ -212,29 +217,23 @@ index 0000000..e10b661
 +	if (!log_ebs)
 +		log_alloc_runtime();
 +
-+	/* Primary: volatile RAM var. No SPI/FTW. Works when FAT is already down. */
-+	st = log_set_named(u"QebspilAdsp", LOG_ATTR_RAM, loglen, logbuf);
-+	if (EFI_ERROR(st))
-+		st = log_set_named(u"QebspilAdsp", LOG_ATTR_NV, loglen, logbuf);
++	/* Zero-pad to LOG_MAX so EBS does not grow the store. */
++	if (loglen < LOG_MAX)
++		SetMem(logbuf + loglen, LOG_MAX - loglen, 0);
 +
++	st = log_set_fixed(u"QebspilAdsp", logbuf, LOG_MAX, logbuf, loglen);
++	(void)st;
 +	log_set_last_line();
 +
 +	if (log_ebs)
 +		return;
 +
-+	/* Load-time only: NV pointer + FAT copy. Never touch FAT at EBS. */
-+	if (logbuf_phys) {
-+		ptrlen = log_ascii(ptr, sizeof(ptr),
-+				   "rt=0x%lx cap=%d used=%d var=0x%lx",
-+				   (UINTN)logbuf_phys, LOG_MAX, loglen,
-+				   (UINTN)st);
-+		log_set_named(u"QebspilPtr", LOG_ATTR_NV, ptrlen, ptr);
-+	}
-+	Print(u"qebspil: log var persist: %r (%d bytes)\n", st, loglen);
++	Print(u"qebspil: log var persist: %r (%d bytes, slot %d)\n",
++	      st, loglen, LOG_MAX);
 +	log_persist_file();
 +}
 diff --git a/src/main.c b/src/main.c
-index 8262564..58e13c2 100644
+index 8262564..3ad751b 100644
 --- a/src/main.c
 +++ b/src/main.c
 @@ -15,7 +15,13 @@ static EFI_STATUS efi_late_ebs(void)
@@ -255,7 +254,7 @@ index 8262564..58e13c2 100644
  	InitializeLib(image, system_table);
  
  	Print(u"Hello World!\n");
-+	qebspil_log("qebspil: ebs-efivar-ram build");
++	qebspil_log("qebspil: ebs-efivar-fixed build");
 +	qebspil_log_persist();
  
  	status = BS->HandleProtocol(image, &LoadedImageProtocol, (VOID**)&LoadedImage);

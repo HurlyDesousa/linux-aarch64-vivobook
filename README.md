@@ -246,8 +246,8 @@ ELF is expected after tearing down UEFI 0x24. Preferred: main
 `scm_pil_init` failed (no DTB rollback); AUTH-fail of main would
 have dropped 0x24. **HOLD** `attach_running_main`. Next: copy
 [qebspil/qebspilaa64.efi](qebspil/qebspilaa64.efi) over the live
-ALWAYS_START efi (ebs-efivar-ram; paste `QebspilAdsp` only). No
-ConOut photo.
+ALWAYS_START efi (ebs-efivar-fixed 4 KiB NV slot; paste
+`QebspilAdsp` only). No ConOut photo.
 
 See [docs/adsp-22.md](docs/adsp-22.md) and the operator recipe
 [docs/qebspil-dtbloader.md](docs/qebspil-dtbloader.md)
