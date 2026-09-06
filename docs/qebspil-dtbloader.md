@@ -9,9 +9,11 @@ That line is prepare only. USB `/firmware/...` next to qebspil
 **closed**. No-reuse default boot **landed**: `PAS shutdown dtb
 (id=0x24): 0` + `main (id=0x1): -22` + NS `-22` on `adsp_dtbs.elf`
 → attach-to-lite. Late EBS **ran**; Insyde TPL is **not** totally
-dead. Main never left up. Next gate: ConOut Failed line for
-**main** INIT vs AUTH (INIT-fail preferred — no DTB rollback).
-**HOLD** `attach_running_main`.
+dead. Main never left up. Next gate is a **binary**: copy
+[qebspil/qebspilaa64.efi](../qebspil/qebspilaa64.efi) (main-fail
+file + efivar log) over the live ALWAYS_START efi. INIT-fail
+preferred — no DTB rollback. **HOLD** `attach_running_main`.
+No ConOut photo.
 
 ## Why this recipe exists
 
@@ -155,8 +157,8 @@ adsp+cdsp and still land on lite / Dummy Output.
 ExitBootServices** (`efi_late_ebs` → `pil_finish_all` →
 `pil_finish`). That is the Limine → UKI handoff, not `load` time.
 No-reuse `0x24: 0` means that callback **ran**. The remaining
-photo is the **main** Failed line (empty suffix), not whether
-`Starting` appeared.
+ask is the patched efi log (`[MAIN] stage=INIT` vs `AUTH`), not
+whether `Starting` appeared and not a ConOut photo.
 
 ## Late EBS is the AUTH gate (`pil_finish`)
 
@@ -175,13 +177,14 @@ first (ConOut suffix ` DTB`) then main (empty suffix):
 No-reuse dump **landed**: `PAS shutdown dtb (id=0x24): 0` and
 `main (id=0x1): -22`. Late EBS ran; DTB left up; main never left
 up. INIT-fail of main has **no** rollback (matches LIVE). AUTH-fail
-of main **stops** DTB (would predict `0x24: -22`). Exact fail line
-= Toby ConOut photo of the **empty-suffix** Failed line.
+of main **stops** DTB (would predict `0x24: -22`). Exact stage is
+the patched efi log (`[MAIN] stage=INIT` vs `AUTH`), not a photo.
 
 `efi_late_ebs` (`src/main.c`): SUCCESS returns immediately.
 `BS->Stall(500ms)` is only on the error path (inverted vs the
-"wait for handover" comment). Documented upstream quirk — do not
-patch qebspil here unless asked.
+"wait for handover" comment). Upstream quirk — do not change Stall
+here. The **log** patch in [qebspil/](../qebspil/) is the
+justified qebspil edit (file + efivar; TPL/Stall untouched).
 
 ### Insyde + TPL hack (retired as primary)
 
@@ -192,23 +195,23 @@ TPL poke is **retired**: no-reuse `0x24: 0` means `pil_finish`
 ran. TPL can still be flaky; it is not the “0x24 up, 0x1 never”
 explanation.
 
-## Photograph this (Toby / Omarchy — **the** next boot)
+## Next: copy the main-fail-log EFI (no photo)
 
-One photo (or burst) through Limine pick → UKI on the **default**
-entry (no reuse). `Starting remoteproc` is now **expected**. Capture
-the **main** Failed line (empty suffix, no ` DTB`):
+ConOut photo is **retired**. Prebuilt
+[qebspil/qebspilaa64.efi](../qebspil/qebspilaa64.efi) (`ALWAYS_START=1`
++ file/efivar log). Copy it over the live `qebspilaa64.efi` on the
+same volume as dtbloader + MATCH firmware. Recipe:
+[qebspil/README.md](../qebspil/README.md).
 
-| ConOut (after `Starting … adsp-pas`) | meaning | vs no-reuse LIVE |
+| log (`[MAIN] pas=0x1 stage=…`) | meaning | vs no-reuse LIVE |
 |--------|---------|------------------|
-| `Failed to init firmware for qcom,x1e80100-adsp-pas:` `(wrong firmware?)` | main INIT failed; DTB **not** rolled back | **preferred** (`0x24: 0`, `0x1: -22`) |
-| `Failed to authenticate and start firmware for qcom,x1e80100-adsp-pas:` | main AUTH failed; qebspil **stops DTB** | would predict `0x24: -22` |
-| `Failed to init/authenticate … DTB` | DTB never left up | contradicts `0x24: 0` |
-| `Starting` and no Failed-* for ADSP | claims AUTH of 0x24 **and** 0x1 | then next default boot must show `PAS shutdown main (id=0x1): 0` |
-| `Firmware check failed` / `Failed to load firmware metadata` / `Failed to setup memory area` / `Failed to load firmware` + empty suffix | never reached INIT/AUTH of main | say which line |
+| `stage=INIT` fail | main INIT failed; DTB **not** rolled back | **preferred** |
+| `stage=AUTH` fail | main AUTH failed; qebspil **stops DTB** | would predict `0x24: -22` |
+| `[DTB]` INIT/AUTH fail | DTB never left up | contradicts `0x24: 0` |
+| `AUTH ok (DTB+MAIN)` | claims AUTH of 0x24 **and** 0x1 | then default boot `PAS shutdown main (id=0x1): 0` |
 
 USB `/firmware/...` next to `qebspilaa64.efi` is **already MATCH**.
-Do not re-hash. Do not rebuild qebspil for louder logs unless this
-photo is unreadable. **HOLD** `attach_running_main`.
+Do not re-hash. **HOLD** `attach_running_main`.
 
 `ALWAYS_START` / missing `qcom,broken-reset` skip the **whole**
 rproc at enumerate — they do **not** start DTB and skip main.
@@ -260,8 +263,10 @@ error -22 initializing …/adsp_dtbs.elf
 `0x24: 0` = late EBS ran; DTB left up (INIT and/or AUTH). Insyde
 TPL is **not** totally dead. `0x1: -22` = main never left up.
 NS `-22` on `adsp_dtbs.elf` is **expected** after tearing down
-UEFI 0x24. Audio still Dummy. The remaining ask is the ConOut
-**main** Failed line (§ above), not another PAS dump.
+UEFI 0x24. Audio still Dummy. The remaining ask is **copy**
+[qebspil/qebspilaa64.efi](../qebspil/qebspilaa64.efi) onto that
+volume, then read `\qebspil-adsp.log` / efivar `QebspilAdsp`.
+Not a photo. Not another PAS dump.
 
 If EBS AUTH of **main PAS 0x1** succeeded, first confirm the next
 **default** boot shows `PAS shutdown main (id=0x1): 0`. Only then A/B
@@ -280,7 +285,9 @@ qcom_q6v5_pas.attach_running_main=1
 
 - Not another NS `PAS_INIT` kernel tweak. That does not publish the
   DTB table and does not AUTH 0x1. pkgrel stays 11.
-- Not a reason to fork Limine or patch qebspil (TPL / Stall) here.
+- Not a reason to fork Limine or patch qebspil TPL / Stall. The
+  main-fail file + efivar patch in `qebspil/` is the justified
+  edit (prebuilt `qebspilaa64.efi` ready to copy).
 - Not a TZ signature fix. Found-remoteproc + lite still has no
   audio until UEFI AUTH of full ADSP (main 0x1).
 - Not a missing `/firmware` path on this USB (MATCH closed).

@@ -611,7 +611,7 @@ The **default** (no-reuse) dump **landed** (next section):
 `0x24: 0`, `0x1: -22`. That is the proof late EBS INITed/AUTH’d
 DTB on this staging. Older 7.2.2-9 `0x24: 0` was a different
 boot (no dtbloader / no Found-remoteproc). Exact main fail line
-(INIT vs AUTH) still needs the Limine→UKI ConOut photo.
+(INIT vs AUTH) is the patched efi log, not a ConOut photo.
 
 `efi_late_ebs` (`src/main.c`): on SUCCESS returns immediately.
 `BS->Stall(500ms)` is only on the error path (inverted vs the
@@ -723,32 +723,40 @@ main only. REUSE_PARTIAL already kept 0x24 and NS `PAS_INIT` of
 `qcadsp8380.mbn` was **-22**; 0x1 was never up, so
 `attach_running_main` stays **HOLD**. pkgrel stays 11.
 
-## Next on-device experiment (Omarchy / Toby) — one primary
+## Next artifact (no ConOut photo, no dedicated reboot)
 
 dtbloader + ALWAYS_START + Found-remoteproc + **no-reuse PAS dump**
 are **done**. USB `/firmware` MATCH is **closed**. pkgrel 11 held.
-No rebuild ask. **HOLD** `attach_running_main`. Operator recipe:
-[qebspil-dtbloader.md](qebspil-dtbloader.md).
+**HOLD** `attach_running_main`. No kernel install. ConOut photo is
+**retired**. The INIT vs AUTH gate is the patched ALWAYS_START
+`qebspilaa64.efi` in [qebspil/](../qebspil/).
 
-### Primary: one ConOut photo of the **main** Failed line
+### Primary: copy the prebuilt EFI onto the live stick
 
-`Print()` is ConOut only. Same dtbloader → ALWAYS_START → Limine
-**default** (no reuse). Photograph Limine pick → UKI until the
-qebspil Failed line for **ADSP main** (empty suffix, no ` DTB`).
-`Starting remoteproc` is now **expected** (0x24:0). The ask is
-which Failed line, not whether late EBS ran.
+```
+cp qebspil/qebspilaa64.efi /path/to/that/volume/qebspilaa64.efi
+```
 
-| ConOut (after `Starting remoteproc: qcom,x1e80100-adsp-pas`) | meaning | vs LIVE |
-|--------|---------|---------|
-| `Failed to init firmware for qcom,x1e80100-adsp-pas:` (empty suffix) `(wrong firmware?)` | main `scm_pil_init` failed; DTB **not** rolled back | **preferred** — matches `0x24: 0` + `0x1: -22` |
-| `Failed to authenticate and start firmware for qcom,x1e80100-adsp-pas:` (no ` DTB`) | main AUTH failed; qebspil **stops DTB** | would predict `0x24: -22`; **not** the lead vs this dump |
-| `Failed to init firmware for … DTB` / `Failed to authenticate … DTB` | DTB never left up | contradicts `0x24: 0` |
-| `Starting` and **no** Failed-* for ADSP | claims AUTH of DTB **and** main | then confirm next default boot `PAS shutdown main (id=0x1): 0` — still no attach-main on that first boot |
-| `Firmware check failed` / `Failed to load firmware metadata` / `Failed to setup memory area` / `Failed to load firmware` + empty suffix | never reached INIT/AUTH of main | say which line |
+Same USB/ESP that already has dtbloader + MATCH firmware. After
+that file is staged, the next time the machine is up (no photo):
 
-Do **not** re-hash the stick. Do **not** rebuild qebspil for louder
-logs unless this photo is unreadable. Do **not** enable
-`attach_running_main`. Do **not** bump pkgrel.
+```
+dd if=/sys/firmware/efi/efivars/QebspilAdsp-6b7c0a11-24e1-4a01-9e80-11ad50010024 \
+   bs=1 skip=4 status=none; echo
+cat /qebspil-adsp.log
+```
+
+| log (`[MAIN] pas=0x1 stage=…`) | meaning | vs LIVE |
+|----------|---------|---------|
+| `stage=INIT` fail | main `scm_pil_init` failed; DTB **not** rolled back | **preferred** |
+| `stage=AUTH` fail | main AUTH failed; qebspil **stops DTB** | would predict `0x24: -22` |
+| `[DTB]` INIT/AUTH fail | DTB never left up | contradicts `0x24: 0` |
+| `AUTH ok (DTB+MAIN)` | claims AUTH of both | then default boot `PAS shutdown main (id=0x1): 0` |
+| `fw_check` / `metadata` / `mem_setup` / `fw_load` fail on MAIN | never reached INIT/AUTH of main | say which stage |
+
+Do **not** re-hash the stick. Do **not** enable
+`attach_running_main`. Do **not** bump pkgrel. Rebuild
+(optional): `qebspil/build-main-fail-log.sh`.
 
 ### After EBS shows AUTH_RESET of 0x1
 
@@ -783,8 +791,9 @@ later audio/GLINK problem, not another PAS_INIT of the OEM MBN.
   step. `CONFIG_RESET_GPIO=y` is already on.
 - Do **not** claim another NS `PAS_INIT` kernel tweak publishes
   `EfiDtbTableGuid` or AUTHs 0x1. Do **not** bump pkgrel.
-- Do **not** fork Limine or patch qebspil (TPL / Stall) in this
-  repo unless asked.
+- Do **not** fork Limine or patch qebspil TPL / Stall. The
+  main-fail **file + efivar** patch in `qebspil/` is the
+  justified edit.
 - A full remoteproc-core `RPROC_DETACHED` / Gerhold
   `wip/x1e80100-6.16-el2` backport is the upstream-shaped late-attach;
   pkgrel 11 is the 7.2-sized landing pad for the same moment (main
