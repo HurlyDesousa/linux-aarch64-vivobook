@@ -345,36 +345,223 @@ A/B back to attach-to-lite: drop the cmdline flag (default N).
 Do **not** combine with `attach_lite_on_dtb_fail=0` for the first reuse
 boot (that kills lite before DTB/main work).
 
-## Next on-device experiments (if reuse does not get a card)
+## 7.2.2-10 REUSE_PARTIAL VERIFY (Omarchy, live)
 
-These are for the laptop, not another kernel DTS patch:
+Booted `linux-aarch64-vivobook-adsp-reuse` · uname `7.2.0-10` · pkgs
+**7.2.2-10** · cmdline `qcom_q6v5_pas.reuse_authenticated_dtb=1`.
 
-1. **qebspil console at late EBS.** Did it print `Starting remoteproc:
-   qcom,x1e80100-adsp-pas`? Did `TZ_PIL_INIT` / `AUTH_RESET` succeed for
-   DTB 0x24 and/or main 0x1? Did it stop lite? If ADSP was skipped,
-   rebuild qebspil with `QEBSPIL_ALWAYS_START=1` (Vivobook DT has no
-   `qcom,broken-reset`).
-2. **ESP vs Linux firmware paths.** qebspil reads
-   `/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/` on the ESP. Linux
-   reads `/lib/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/`. Confirm
-   they are the same `adsp_dtbs.elf` / `qcadsp8380.mbn` (do not commit
-   blobs). A QTI-CASS / different-signed DTB on the ESP is the real TZ
-   path if one exists.
-3. **qebspil timing.** Late EBS stall is 500 ms in qebspil (`FIXME:
-   wait for SMP2P`). If INIT 0x24 happened but AUTH_RESET 0x24 did not
-   finish before Linux `start()`, reuse still has an initialized DTB
-   but not a started one; main AUTH_RESET may then be the clearer
-   failure.
-4. **Keep default attach-to-lite** as the daily boot. Only use
-   `reuse_authenticated_dtb=1` for A/B. If charging dies on the
-   AUTH_RESET-after-lite-stop path, that is a recorded failure, not a
-   reason to add sound-card DTS.
-5. Do **not** add Vivobook sound-card / WSA DTS as the next step. Full
-   ADSP first. `CONFIG_RESET_GPIO=y` is already on.
+Authoritative dmesg (~00:02 CEST):
 
-qebspil README also says Linux needs extra patches to **take over** a
-firmware qebspil already started (Gerhold `wip/x1e80100-6.16-el2` /
-`wip/qcom-laptops-6.17-el2`, plus upstream late-attach
-`RPROC_DETACHED`). That is for a running **main** PAS 0x1. Post-qebspil
-VERIFY shows 0x1 was not running, so that backport is not the next
-step.
+```
+remoteproc0: Booting fw image .../qcadsp8380.mbn, size 21879224
+6800000.remoteproc: reusing UEFI/qebspil DTB PAS (id=0x24); skip teardown + NS .../adsp_dtbs.elf PAS_INIT
+6800000.remoteproc: PAS shutdown main (id=0x1): -22
+6800000.remoteproc: error -22 initializing firmware .../qcadsp8380.mbn
+6800000.remoteproc: full ADSP start failed (err=-22); attaching to UEFI lite ADSP (PAS 0x1f) ...
+attach-to-lite fallback, not a TZ signature fix; full audio ADSP still needs a TZ-accepted DTB
+remoteproc0: remote processor adsp is now up
+```
+
+CDSP on the same boot: dtb `0x25` shutdown **-22**; main `0x12` shutdown
+**0** then came up (fastrpc/IPCRTR **-12**). CDSP NS PAS of the QTI-CASS
+main MBN works. ADSP does not. remoteproc adsp+cdsp running (lite);
+`aplay -l` empty; PipeWire Dummy Output.
+
+qebspil EBS AUTH log: **none on USB** (stick had EFI binaries +
+`startup.nsh` only). `Print()` goes to UEFI ConOut (screen / serial),
+not a file next to `qebspilaa64.efi`.
+
+### What this proves
+
+| claim | result |
+|-------|--------|
+| pkgrel 10 reuse path ran | **yes** — skip 0x24 teardown + skip NS `adsp_dtbs.elf` PAS_INIT |
+| main 0x1 was already AUTH/INIT in UEFI | **no** — `PAS shutdown main (id=0x1): -22` then and now |
+| Linux NS `PAS_INIT` of OEM `qcadsp8380.mbn` | **-22** — same class as NS `adsp_dtbs.elf` |
+| attach-to-lite still saved charging | **yes** — lite never killed |
+| ALSA card on lite | **no** — lite has no audio |
+| limine / pkg miss | **no** — reuse line + 7.2.2-10 uname |
+| another board DTS / sound-card carveout | **not the fix** for PAS -22 |
+
+Inference (matches qebspil `pil_finish()`): post-qebspil `0x24`
+shutdown=0 means TZ had DTB PAS state (INIT and/or AUTH). Main `0x1`
+stayed -22 — **no evidence AUTH (or even INIT) of 0x1**. Kernel reuse
+only reuses DTB 0x24.
+
+qebspil (`stephan-gh/qebspil` `src/pil.c`) for
+`qcom,x1e80100-adsp-pas` does **DTB then main**: `scm_pil_init` +
+`scm_pil_mem_setup` for 0x24, then the same for 0x1. If main INIT fails
+(`Failed to init firmware for … (wrong firmware?)`) it **returns
+without rolling back DTB**. Rollback `scm_pil_stop` of already-started
+full ids happens only on later `scm_pil_start` (AUTH_RESET) failure.
+That is exactly "0x24 shutdown-able, 0x1 never up".
+
+Default qebspil also **skips** Vivobook ADSP unless built with
+`QEBSPIL_ALWAYS_START=1` (board DT has no `qcom,broken-reset`).
+qebspil only enumerates after the bootloader installs `EfiDtbTableGuid`.
+
+### Hypotheses (pkgrel 10) — keep / discard
+
+1. **Main PAS 0x1 also needs UEFI/qebspil AUTH** (same class as DTB).
+   Linux NS cannot `PAS_INIT` OEM-signed `qcadsp8380.mbn`. **Kept.**
+   Next: get UEFI to AUTH_RESET 0x1, then Linux attach/reuse for main.
+2. Wrong Linux auth_reset vs init_image order / metadata / carveout
+   after reused DTB. **Discarded as primary.** We never reached main
+   AUTH_RESET; NS `PAS_INIT` 0x1 failed first. Do not ship another
+   0005 sequence tweak hoping NS accepts the MBN.
+3. Blob mismatch ESP `/firmware` vs `/lib/firmware`. **Still open on
+   the laptop** (no EBS log). Must hash-check; do not assume.
+4. Something else unique in 7.2 `qcom_q6v5_pas` / SCM. **Not primary.**
+   CDSP main 0x12 NS path works on the same kernel.
+
+Do **not** invent sound-card / WSA DTS as the PAS -22 fix.
+`CONFIG_RESET_GPIO=y` already. Do **not** try another NS `PAS_INIT` of
+the OEM MBN.
+
+## Kernel change (pkgrel 11)
+
+New patch `0006-x1e-adsp-attach-running-main.patch` on top of unchanged
+`0001` + `0005`:
+
+1. Module param `qcom_q6v5_pas.attach_running_main` (bool, **default
+   N**). Daily boot stays attach-to-lite / charging. CDSP unchanged
+   (`lite_pas_id` required).
+2. When set on ADSP: after proxy PDs/XO/regulators, **before** any
+   `PAS_SHUTDOWN`:
+   - do **not** tear down 0x24 or 0x1
+   - do **not** NS `PAS_INIT` DTB or main
+   - do **not** `AUTH_RESET` (UEFI already did that if 0x1 is up)
+   - log `attaching to UEFI/qebspil main ADSP (PAS 0x1); skip teardown
+     + NS PAS_INIT + AUTH_RESET`
+   - `main_attached` + `handover_issued`; `start()` returns 0
+3. `stop()` leaves UEFI main running (same idea as lite attach).
+4. **Unsafe if 0x1 is not running.** That claims full ADSP while only
+   lite is up; GLINK/battmgr may break. Do **not** enable until the
+   qebspil EBS log shows AUTH_RESET of main 0x1 succeeded.
+
+`reuse_authenticated_dtb=1` is now a **known dead end for audio**:
+it still `PAS_SHUTDOWN` main, then NS `PAS_INIT`s the OEM MBN (-22),
+then attach-to-lite. After UEFI has 0x1, **do not** use that flag —
+it will destroy the running main. Use `attach_running_main=1` only.
+
+## How to tell if pkgrel 11 attach-main worked
+
+Build `7.2.2-11-aarch64-vivobook`. Daily boot: **no new flags**.
+
+**C — attach-main (only after EBS AUTH of 0x1):**
+
+```
+qcom_q6v5_pas.attach_running_main=1
+```
+
+Do **not** also set `reuse_authenticated_dtb=1` on that boot.
+
+```
+dmesg | grep -E 'PAS shutdown|initializing firmware|attaching to|reusing UEFI|attach_running_main'
+cat /sys/class/remoteproc/remoteproc0/state
+cat /sys/class/power_supply/qcom-battmgr-bat/{capacity,status}
+aplay -l
+```
+
+| outcome | dmesg | audio / batt |
+|---------|-------|----------------|
+| used too early (0x1 still -22) | `attaching to UEFI/qebspil main ADSP`; **no** `PAS shutdown main`; **no** attach-to-lite | no card; **charging/GLINK may break** — drop the flag |
+| UEFI AUTH 0x1 + attach | attach-main line; no `-22 initializing .../qcadsp8380.mbn`; no lite fallback | `aplay -l` *may* grow a card; RESET_GPIO unmute only then |
+| default / no flag | same as 7.2.2-3..10 attach-to-lite | no card; charging stays |
+
+## Next on-device experiments (Omarchy / Toby)
+
+Blocked on **firmware/UEFI**, not another 7.2 PAS sequence patch.
+Capture these on the laptop. Do not commit blobs.
+
+### 1. Get a real qebspil EBS log (ConOut, not USB)
+
+`Print()` in `stephan-gh/qebspil` (`Hello World!`, `Found remoteproc`,
+`Starting remoteproc`, `Failed to init firmware … (wrong firmware?)`,
+`Failed to authenticate and start firmware`) goes to the UEFI console.
+A USB stick with only `qebspilaa64.efi` + `startup.nsh` is **not** a
+log. Photograph the panel around ExitBootServices, or use a serial
+console if one exists.
+
+Must answer:
+
+- Did it print `qebspil: Found remoteproc: qcom,x1e80100-adsp-pas`?
+  If not: the bootloader did not install `EfiDtbTableGuid` (qebspil
+  README: systemd-boot / GRUB / dtbloader / UKI-with-DTB). Limine
+  must install the Linux DTB as that UEFI config table or qebspil
+  never starts ADSP.
+- Did it print `qebspil: Starting remoteproc: qcom,x1e80100-adsp-pas`?
+- `Failed to init firmware for … DTB` vs `…` (main, empty suffix)?
+- `Failed to authenticate and start firmware` for DTB and/or main?
+- Did it stop lite before AUTH_RESET?
+
+### 2. Rebuild qebspil with ALWAYS_START
+
+```
+make CROSS_COMPILE=aarch64-linux-gnu- QEBSPIL_ALWAYS_START=1
+```
+
+Vivobook `&remoteproc_adsp` has **no** `qcom,broken-reset`. Stock
+qebspil skips ADSP. Copy new `out/qebspilaa64.efi` next to the ESP
+firmware. Do not add `qcom,broken-reset` to the board DTS as a
+workaround unless that is a deliberate Linux-side policy change.
+
+### 3. ESP vs `/lib/firmware` identity (do not commit hashes in a blob)
+
+qebspil reads from the **same volume as `qebspilaa64.efi`**:
+
+```
+/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/adsp_dtbs.elf
+/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/qcadsp8380.mbn
+```
+
+Linux reads `/lib/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/`.
+If ESP is missing `qcadsp8380.mbn` or it is a different file, qebspil
+INITs DTB then fails main INIT and **leaves 0x24 up** — the
+REUSE_PARTIAL signature.
+
+On the laptop (example; do not paste firmware into git):
+
+```
+# ESP mount may be /boot or /efi — use the volume that holds qebspilaa64.efi
+sha256sum \
+  /lib/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/adsp_dtbs.elf \
+  /lib/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/qcadsp8380.mbn \
+  /boot/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/adsp_dtbs.elf \
+  /boot/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/qcadsp8380.mbn
+ls -l /sys/class/remoteproc/remoteproc0/device  # confirm firmware-name
+```
+
+Both names must exist on the qebspil volume and match Linux (or be a
+known QTI-CASS substitute). `qcadsp8380.mbn` size on the reuse boot
+was **21879224** from Linux `request_firmware`.
+
+### 4. After EBS shows AUTH_RESET of 0x1
+
+1. Confirm on the **next** Linux boot **without** extra flags that
+   `PAS shutdown main (id=0x1): 0` (was up). If it is still -22,
+   UEFI did not leave main running; do not enable attach-main.
+2. Then A/B:
+
+   ```
+   qcom_q6v5_pas.attach_running_main=1
+   ```
+
+3. **Do not** set `reuse_authenticated_dtb=1` on that boot (destroys
+   0x1). **Do not** set `attach_lite_on_dtb_fail=0`.
+4. Expect `attaching to UEFI/qebspil main ADSP` and **no**
+   `PAS shutdown main`. Then `aplay -l`. If still empty, that is a
+   later audio/GLINK problem, not another PAS_INIT of the OEM MBN.
+
+### 5. What not to do
+
+- Daily boot stays **no flags** (attach-to-lite, charging).
+- Do **not** use `attach_running_main=1` while 0x1 shutdown is -22.
+- Do **not** add Vivobook sound-card / WSA DTS as the next PAS -22
+  step. `CONFIG_RESET_GPIO=y` is already on.
+- Do **not** treat attach-to-lite or REUSE_PARTIAL as a TZ signature
+  fix.
+- A full remoteproc-core `RPROC_DETACHED` / Gerhold
+  `wip/x1e80100-6.16-el2` backport is the upstream-shaped late-attach;
+  pkgrel 11 is the 7.2-sized landing pad for the same moment (main
+  already running). Not needed until EBS AUTH of 0x1 exists.
