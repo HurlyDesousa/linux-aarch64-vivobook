@@ -211,8 +211,30 @@ charging/GLINK may break). After EBS shows AUTH of 0x1, use this flag
 **alone** — do not also set `reuse_authenticated_dtb=1` (that path
 still `PAS_SHUTDOWN`s main). CDSP unchanged.
 
-See [docs/adsp-22.md](docs/adsp-22.md) for the Omarchy/Toby EBS
-checklist (ALWAYS_START, ConOut log, ESP vs `/lib/firmware` hashes).
+**7.2.2-11 ConOut VERIFY** (pkgrel 11 held): EFI `load qebspilaa64.efi`
+printed `Hello World!` + `Found QCOM SCM protocol version 0x50002` +
+`Image loaded … Success`. **No** `Found remoteproc` / Starting / AUTH
+for 0x24 or 0x1. Post-boot systab has ACPI/SMBIOS only — **no `DTB=`**.
+`dmesg` efi lists SMBIOS/TPM/ACPI/MEMATTR/ESRT/RNG/INITRD/MEMRESERVE
+— **no DTB**. `/sys/firmware/fdt` exists via UKI; that is not the EFI
+DTB config table. `limine.conf` is `protocol` `efi` + the same UKI
+(cmdline A/B only); no `dtb_path` / `efi_dtb` / `global_dtb`. Firmware
+hashes MATCH.
+
+**Root cause:** qebspil (`efi_dtb_changed` /
+`LibGetSystemConfigurationTable`) enumerates remoteprocs only when
+`EfiDtbTableGuid` is installed. **Limine never publishes that GUID**
+(UKI `efi` protocol feeds the kernel, not other EFI drivers).
+**Fix:** load TravMurav [dtbloader](https://github.com/TravMurav/dtbloader)
+first (`InstallConfigurationTable`), then
+`qebspilaa64.efi` built with `QEBSPIL_ALWAYS_START=1` (Vivobook DT has
+no `qcom,broken-reset`), then Limine. Do not fork Limine here. Do not
+enable `attach_running_main` until 0x1 AUTHs. Do not treat another
+NS `PAS_INIT` tweak as a table fix.
+
+See [docs/adsp-22.md](docs/adsp-22.md) and the operator recipe
+[docs/qebspil-dtbloader.md](docs/qebspil-dtbloader.md)
+(`startup.nsh`: `load dtbloader.efi` then `load qebspilaa64.efi`).
 Patches live at repo root as
 `0001-x1e-adsp-dtb-init-after-power.patch`,
 `0002-qcom-battmgr-capacity-from-energy.patch`,
@@ -229,7 +251,8 @@ cat /sys/class/power_supply/qcom-battmgr-bat/capacity
 aplay -l
 ```
 
-Daily boot: no extra flags (attach-to-lite). After qebspil AUTH of
+Daily boot: no extra flags (attach-to-lite). Stage **dtbloader then
+qebspil** on ESP before expecting AUTH of 0x1. After EBS AUTH of
 0x1 only: Limine cmdline `qcom_q6v5_pas.attach_running_main=1`.
 
 ## Build and install (on the Vivobook)
