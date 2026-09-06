@@ -232,6 +232,21 @@ no `qcom,broken-reset`), then Limine. Do not fork Limine here. Do not
 enable `attach_running_main` until 0x1 AUTHs. Do not treat another
 NS `PAS_INIT` tweak as a table fix.
 
+**7.2.2-11 dtbloader VERIFY** (pkgrel 11 held): after dtbloader →
+ALWAYS_START qebspil → Limine, ConOut **`Found remoteproc` OK**
+(adsp+cdsp). That is enumerate+prepare only — **not AUTH**. Same
+boot with `reuse_authenticated_dtb=1`: reuse line, `PAS shutdown
+main (id=0x1): -22`, attach-to-lite, Dummy / no cards. reuse
+**skips** 0x24 shutdown, so this boot does **not** prove DTB AUTH.
+`systab` still no `DTB=` (post-EBS; secondary). Late-EBS ConOut
+(`Starting remoteproc` / INIT / AUTH at Limine→UKI) **not captured
+yet**. Insyde + qebspil `event.c` TPL poke is suspect if there is
+no `Starting`. Firmware must sit on the same FAT as
+`qebspilaa64.efi` under
+`/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/`. **HOLD**
+`attach_running_main`. Next: one Limine→UKI ConOut photo (or one
+no-reuse boot to read `PAS shutdown dtb 0x24` vs main 0x1).
+
 See [docs/adsp-22.md](docs/adsp-22.md) and the operator recipe
 [docs/qebspil-dtbloader.md](docs/qebspil-dtbloader.md)
 (`startup.nsh`: `load dtbloader.efi` then `load qebspilaa64.efi`).
@@ -251,9 +266,11 @@ cat /sys/class/power_supply/qcom-battmgr-bat/capacity
 aplay -l
 ```
 
-Daily boot: no extra flags (attach-to-lite). Stage **dtbloader then
-qebspil** on ESP before expecting AUTH of 0x1. After EBS AUTH of
-0x1 only: Limine cmdline `qcom_q6v5_pas.attach_running_main=1`.
+Daily boot: no extra flags (attach-to-lite). dtbloader then
+ALWAYS_START qebspil is already staged (`Found remoteproc` OK).
+Next is a Limine→UKI ConOut photo of `Starting` / INIT / AUTH —
+not `attach_running_main`. After EBS AUTH of 0x1 only: Limine
+cmdline `qcom_q6v5_pas.attach_running_main=1`.
 
 ## Build and install (on the Vivobook)
 

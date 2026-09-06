@@ -545,98 +545,181 @@ Keep using `adsp-reuse` (`reuse_authenticated_dtb=1`) only as the
 known REUSE_PARTIAL A/B; that path still cannot NS `PAS_INIT` the
 OEM main MBN.
 
-## Next on-device experiments (Omarchy / Toby)
+## 7.2.2-11 dtbloader → ALWAYS_START VERIFY (late-EBS AUTH open)
 
-Blocked on **firmware/UEFI** (dtbloader + ALWAYS_START qebspil), not
-another 7.2 PAS sequence patch. Capture these on the laptop. Do not
-commit blobs. Full copy/load steps:
-[qebspil-dtbloader.md](qebspil-dtbloader.md).
+After dtbloader → `QEBSPIL_ALWAYS_START=1` qebspil → Limine, on the
+`adsp-reuse` entry (`reuse_authenticated_dtb=1`). pkgrel **11** held.
+No install ask. `attach_running_main` still **off**.
 
-### 1. Stage dtbloader **before** qebspil (the ConOut gap)
-
-Previous qebspil-only `load` is **done** (Hello World + SCM, no
-rproc). Next ConOut must show `Detected device` (dtbloader) then
-`qebspil: Found remoteproc: qcom,x1e80100-adsp-pas`. `Starting` /
-AUTH print at late EBS when Limine/UKI exits boot services —
-photograph that handoff.
-
-`Print()` goes to UEFI ConOut (screen / serial), not a file next to
-the EFI binary.
-
-### 2. Rebuild qebspil with ALWAYS_START
+ConOut at `load` (dtbloader path **works**):
 
 ```
-make CROSS_COMPILE=aarch64-linux-gnu- QEBSPIL_ALWAYS_START=1
+qebspil: Found remoteproc: qcom,x1e80100-adsp-pas
+qebspil: Found remoteproc: qcom,x1e80100-cdsp-pas
 ```
 
-Vivobook `&remoteproc_adsp` has **no** `qcom,broken-reset`. Stock
-qebspil skips ADSP even after the DTB table is installed. Copy new
-`out/qebspilaa64.efi` next to the ESP firmware. Do not add
-`qcom,broken-reset` to the board DTS as a workaround unless that is
-a deliberate Linux-side policy change.
+Linux after that same boot:
 
-### 3. ESP vs `/lib/firmware` identity (already MATCH; re-check if you recopy)
+- reuse line + `PAS shutdown main (id=0x1): -22` → attach-to-lite →
+  Dummy / no cards
+- `/sys/firmware/efi/systab` still **no `DTB=`** (post-EBS; secondary)
+- Late-EBS ConOut (`Starting remoteproc` / INIT / AUTH at Limine→UKI
+  handoff) **not captured yet**
 
-qebspil reads from the **same volume as `qebspilaa64.efi`**:
+**`Found remoteproc` is not AUTH.** In `stephan-gh/qebspil` that
+`Print` lives in `src/dtb.c` `dtb_enumerate_rprocs()`: find the
+node, `fw_prepare` the ELF from the same FAT as `qebspilaa64.efi`,
+`pil_prepare` (proxy vote). It does **not** call `TZ_PIL_INIT` or
+`TZ_PIL_AUTH_RESET`.
+
+Actual start is `pil_finish()` on **late ExitBootServices**:
+`efi_late_ebs` → `pil_finish_all` → `Starting remoteproc`. For each
+component (DTB suffix ` DTB`, then main with an empty suffix):
+
+1. `fw_check` / `fw_load_metadata`
+2. `scm_pil_init` — on fail: `Failed to init firmware for … (wrong
+   firmware?)` and **return with no rollback of prior inits**
+3. `scm_pil_mem_setup`, `fw_load`
+4. stop lite (ignore errors)
+5. `scm_pil_start` (`AUTH_RESET`) — on fail: `Failed to authenticate
+   and start firmware for …` and rollback prior **full** components
+
+### Why this reuse=1 boot does **not** prove DTB AUTH
+
+`reuse_authenticated_dtb=1` **skips** `PAS_SHUTDOWN` of 0x24. So
+dmesg cannot tell INIT/AUTH of 0x24 from "never touched". The
+`PAS shutdown main (id=0x1): -22` line only says main was never
+shutdown-able. Use **ConOut**, not the 0x24 shutdown code, to know
+whether late EBS ran.
+
+Older 7.2.2-9 `PAS shutdown dtb (id=0x24): 0` was a **different**
+boot (no dtbloader / no Found-remoteproc). Do not treat it as proof
+that *this* late EBS INITed 0x24.
+
+Hypothesis that still fits "0x24 up, 0x1 never" *if* a later
+no-reuse boot shows `PAS shutdown dtb (id=0x24): 0`: late EBS
+reached `scm_pil_init` of DTB 0x24; main INIT or AUTH failed (or
+never reached); DTB left up (init-fail has no rollback). Exact fail
+line needs the Limine→UKI ConOut photo.
+
+`efi_late_ebs` (`src/main.c`): on SUCCESS returns immediately.
+`BS->Stall(500ms)` is only on the error path (inverted vs the
+"wait for handover" comment). Upstream quirk — do **not** patch
+qebspil in this repo unless asked.
+
+Linux `systab` missing `DTB=` after EBS is **secondary**. Limine
+`protocol: efi` / UKI may drop `EfiDtbTableGuid` once boot services
+end. It does not say whether qebspil's late-EBS callback ran.
+
+### Insyde + qebspil TPL hack (suspect if no `Starting`)
+
+`event_register_late_ebs_callback` (`src/event.c`) creates an
+`EXIT_BOOT_SERVICES` event at `EFI_TPL_CALLBACK`, then **pokes**
+the EDK2 `IEVENT.NotifyTpl` to `CALLBACK-1` so it runs last. The
+comment says this may not work on other EFI implementations. This
+board is **`EFI v2.9 by INSYDE Corp.`**, not EDK2.
+
+If the internal event layout does not match, qebspil prints
+`Unexpected IEvent structure (not edk2)? … This will probably
+cause problems later.` Found-remoteproc can succeed and late EBS
+can still never fire. **No `Starting remoteproc` on ConOut** after
+a confirmed Found-adsp+cdsp load: flag this hack first. Do not
+assume AUTH ran silently.
+
+Firmware must sit on the **same FAT as `qebspilaa64.efi`**:
 
 ```
 /firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/adsp_dtbs.elf
 /firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/qcadsp8380.mbn
 ```
 
-Linux reads `/lib/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/`.
-If ESP is missing `qcadsp8380.mbn` or it is a different file, qebspil
-INITs DTB then fails main INIT and **leaves 0x24 up** — the
-REUSE_PARTIAL signature.
+`fw_prepare` prefixes `firmware\` onto the DT `firmware-name`.
+Found-remoteproc without `Failed to enumerate` / `Failed to
+prepare` means those files opened at `load` time. Late
+`wrong firmware?` is then TZ/INIT, not a missing path.
 
-On the laptop (example; do not paste firmware into git):
+## Next on-device experiments (Omarchy / Toby)
+
+dtbloader + ALWAYS_START + Found-remoteproc is **done**. The gate
+is late-EBS AUTH of **main PAS 0x1**. pkgrel 11 held. No rebuild
+ask. Do not commit blobs. Operator ConOut recipe:
+[qebspil-dtbloader.md](qebspil-dtbloader.md).
+
+### 1. One ConOut photo through Limine → UKI (preferred)
+
+`Print()` is ConOut only (screen / serial), not a file next to the
+EFI binary. Photograph the panel from Limine pick through UKI
+handoff. Need at least one of:
+
+| ConOut | meaning | next |
+|--------|---------|------|
+| **no** `Starting remoteproc` (after Found adsp+cdsp) | late EBS never ran — Insyde TPL hack suspect; or the photo missed the flash | same photo again if it scrolled; else treat TPL as the lead |
+| `Unexpected IEvent structure (not edk2)?` | TPL poke rejected / unsafe on Insyde | late EBS likely broken; do not enable attach-main |
+| `Starting remoteproc: qcom,x1e80100-adsp-pas` then `Failed to init firmware for … DTB` `(wrong firmware?)` | DTB `scm_pil_init` failed; nothing rolled back | confirm `/firmware/...` next to `qebspilaa64.efi` matches Linux |
+| `Starting` then `Failed to init firmware for qcom,x1e80100-adsp-pas:` (empty suffix, no ` DTB`) | DTB INIT done; main INIT failed; **DTB left up** | firmware / TZ for `qcadsp8380.mbn`; still no attach-main |
+| `Failed to authenticate and start firmware for … DTB` | DTB `AUTH_RESET` failed | not Linux NS `PAS_INIT` |
+| `Failed to authenticate and start firmware for qcom,x1e80100-adsp-pas:` (no ` DTB`) | main AUTH failed; qebspil rolls back DTB | 0x1 never left running |
+| `Starting` and **no** Failed-init / Failed-authenticate for ADSP | late EBS claims AUTH of DTB **and** main | then §3 (still no attach-main on that first boot) |
+
+Also confirm on the USB/ESP that holds `qebspilaa64.efi`:
 
 ```
-# ESP mount may be /boot or /efi — use the volume that holds qebspilaa64.efi
-sha256sum \
-  /lib/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/adsp_dtbs.elf \
-  /lib/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/qcadsp8380.mbn \
-  /boot/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/adsp_dtbs.elf \
-  /boot/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/qcadsp8380.mbn
-ls -l /sys/class/remoteproc/remoteproc0/device  # confirm firmware-name
+/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/adsp_dtbs.elf
+/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/qcadsp8380.mbn
 ```
 
-Both names must exist on the qebspil volume and match Linux (or be a
-known QTI-CASS substitute). pkgrel 11 already hashed MATCH. Recheck
-only if you recopy. `qcadsp8380.mbn` size on the reuse boot was
-**21879224** from Linux `request_firmware`.
+### 2. Optional A/B: one boot **without** reuse (same UEFI staging)
 
-### 4. After EBS shows AUTH_RESET of 0x1
+If the photo is impossible, boot the **same** dtbloader →
+ALWAYS_START qebspil → Limine path **without**
+`reuse_authenticated_dtb=1` (default attach-to-lite). Then:
 
-1. Confirm on the **next** Linux boot **without** extra flags that
-   `PAS shutdown main (id=0x1): 0` (was up). If it is still -22,
-   UEFI did not leave main running; do not enable attach-main.
-2. Then A/B:
+```
+dmesg | grep -E 'PAS shutdown|initializing firmware|attaching to|reusing UEFI'
+```
 
-   ```
-   qcom_q6v5_pas.attach_running_main=1
-   ```
+| dmesg | meaning |
+|-------|---------|
+| `PAS shutdown dtb (id=0x24): 0` | TZ had DTB PAS state (INIT and/or AUTH). Late EBS at least INITed 0x24. |
+| `PAS shutdown dtb (id=0x24): -22` | 0x24 never brought up. Late EBS did not INIT DTB (or never ran). |
+| `PAS shutdown main (id=0x1): 0` | main was up. Only then consider attach-main on a **later** boot. |
+| `PAS shutdown main (id=0x1): -22` | main never up (this is the live reuse-boot fact too). |
 
-3. **Do not** set `reuse_authenticated_dtb=1` on that boot (destroys
-   0x1). **Do not** set `attach_lite_on_dtb_fail=0`.
-4. Expect `attaching to UEFI/qebspil main ADSP` and **no**
-   `PAS shutdown main`. Then `aplay -l`. If still empty, that is a
-   later audio/GLINK problem, not another PAS_INIT of the OEM MBN.
+A reuse=1 boot **cannot** substitute for the 0x24 row.
 
-### 5. What not to do
+### 3. After EBS shows AUTH_RESET of 0x1
 
-- Daily boot stays **no flags** (attach-to-lite, charging).
-- Do **not** use `attach_running_main=1` while 0x1 shutdown is -22
-  (0x1 has never AUTH'd on this board).
+Still **HOLD** `attach_running_main`. First confirm the next
+**default** (no extra flags) boot shows `PAS shutdown main (id=0x1): 0`.
+If it is still -22, UEFI did not leave main running.
+
+Only then A/B:
+
+```
+qcom_q6v5_pas.attach_running_main=1
+```
+
+**Do not** set `reuse_authenticated_dtb=1` on that boot (destroys
+0x1). **Do not** set `attach_lite_on_dtb_fail=0`.
+Expect `attaching to UEFI/qebspil main ADSP` and **no**
+`PAS shutdown main`. Then `aplay -l`. If still empty, that is a
+later audio/GLINK problem, not another PAS_INIT of the OEM MBN.
+
+### 4. What not to do
+
+- Daily boot stays **no flags** (attach-to-lite, charging) unless
+  you are on the known `adsp-reuse` A/B. That A/B still cannot
+  NS `PAS_INIT` the OEM main MBN.
+- Do **not** enable `attach_running_main=1` yet (0x1 shutdown is
+  still -22; 0x1 has never AUTH'd on this board).
+- Do **not** treat Found-remoteproc, attach-to-lite, or
+  REUSE_PARTIAL as a TZ signature fix or as AUTH of 0x1.
 - Do **not** add Vivobook sound-card / WSA DTS as the next PAS -22
   step. `CONFIG_RESET_GPIO=y` is already on.
-- Do **not** treat attach-to-lite or REUSE_PARTIAL as a TZ signature
-  fix.
 - Do **not** claim another NS `PAS_INIT` kernel tweak publishes
-  `EfiDtbTableGuid` or AUTHs 0x1.
-- Do **not** fork Limine in this repo. A future upstream
-  `InstallConfigurationTable(EfiDtbTableGuid)` is optional; the
-  current path is dtbloader.
+  `EfiDtbTableGuid` or AUTHs 0x1. Do **not** bump pkgrel.
+- Do **not** fork Limine or patch qebspil (TPL / Stall) in this
+  repo unless asked.
 - A full remoteproc-core `RPROC_DETACHED` / Gerhold
   `wip/x1e80100-6.16-el2` backport is the upstream-shaped late-attach;
   pkgrel 11 is the 7.2-sized landing pad for the same moment (main
