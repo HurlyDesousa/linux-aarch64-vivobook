@@ -469,31 +469,99 @@ aplay -l
 | UEFI AUTH 0x1 + attach | attach-main line; no `-22 initializing .../qcadsp8380.mbn`; no lite fallback | `aplay -l` *may* grow a card; RESET_GPIO unmute only then |
 | default / no flag | same as 7.2.2-3..10 attach-to-lite | no card; charging stays |
 
+## 7.2.2-11 ConOut VERIFY (pkgrel 11 held)
+
+EFI Shell `load qebspilaa64.efi` on the ESP, then Limine UKI (Chief +
+Omarchy). ConOut:
+
+```
+Hello World!
+Found QCOM SCM protocol version 0x50002
+Image loaded … Success
+```
+
+**No** `Found remoteproc` / `Starting` / AUTH for PAS 0x24 or 0x1.
+
+Post-boot (~00:16 Berlin, post-reuse; SSH later down):
+
+- `/sys/firmware/efi/systab` — only `ACPI20` / `SMBIOS3` / `SMBIOS`.
+  **No `DTB=` line.** `EfiDtbTableGuid` was never in the config table.
+- `dmesg` efi: `EFI v2.9 by INSYDE Corp.` lists
+  SMBIOS / TPM / ACPI / MEMATTR / ESRT / RNG / INITRD / MEMRESERVE —
+  **no DTB**.
+- `/sys/firmware/fdt` exists (212468 B) via UKI / other. That is
+  **not** the EFI DTB config table.
+- `limine.conf`: `protocol` `efi`, same UKI
+  `omarchy_linux-aarch64-vivobook.efi` for default + `adsp-reuse`
+  (cmdline-only A/B). **No** `dtb_path` / `efi_dtb` / `global_dtb`.
+- Firmware hashes **MATCH**. PR #7 / pkgrel 11 held.
+
+This is the silent no-rproc path: qebspil printed Hello World + SCM
+and then `efi_dtb_changed()` saw `LibGetSystemConfigurationTable`
+`EFI_NOT_FOUND` and returned success without enumerating.
+
+### Root cause (checked in qebspil + dtbloader + Limine docs)
+
+`stephan-gh/qebspil` `efi_main()` registers a group callback on
+`EfiDtbTableGuid` and immediately calls `efi_dtb_changed()`. That
+function only calls `dtb_enumerate_rprocs()` when
+`LibGetSystemConfigurationTable(&EfiDtbTableGuid, &dtb)` succeeds.
+`Found remoteproc` lives in `src/dtb.c`; `Starting remoteproc` /
+INIT / AUTH live in `src/pil.c` and run at late ExitBootServices.
+README: qebspil is active when a bootloader installs a device tree
+(systemd-boot / GRUB / dtbloader).
+
+**Limine does not `InstallConfigurationTable(EfiDtbTableGuid)`.**
+It may consume a DTB via `dtb_path` / `global_dtb` / firmware table
+for the *kernel* on `linux` / `limine` protocols. Omarchy uses
+`protocol: efi` (UKI chainload). That never publishes the GUID for
+other EFI drivers. Loading qebspil from EFI Shell before Limine, or
+with Limine alone, is exactly Hello World + SCM and silent no-rproc.
+
+A kernel NS `PAS_INIT` tweak does **not** create that table. Do
+**not** fork Limine in this repo; a future **upstream** Limine
+`InstallConfigurationTable` is optional, not the path here.
+
+### Fix path: dtbloader, then qebspil, then Limine
+
+TravMurav [dtbloader](https://github.com/TravMurav/dtbloader) is an
+EFI driver that `InstallConfigurationTable`s DeviceTree
+(`EfiDtbTableGuid`). ASUS Vivobook S 15 is on its supported list
+(`src/devices/asus_vivobook_s15.c` →
+`qcom\x1e80100-asus-vivobook-s15.dtb` for S5507QA X Elite).
+
+Order:
+
+1. `load dtbloader.efi` (or `bcfg driver`)
+2. `load qebspilaa64.efi` built with `QEBSPIL_ALWAYS_START=1`
+   (Vivobook DT has no `qcom,broken-reset`)
+3. Boot Limine as today
+
+See [qebspil-dtbloader.md](qebspil-dtbloader.md) for the operator
+recipe (build, ESP/USB layout, `startup.nsh`, expected ConOut).
+
+**Do not** enable `attach_running_main` while 0x1 still never AUTH'd.
+Keep using `adsp-reuse` (`reuse_authenticated_dtb=1`) only as the
+known REUSE_PARTIAL A/B; that path still cannot NS `PAS_INIT` the
+OEM main MBN.
+
 ## Next on-device experiments (Omarchy / Toby)
 
-Blocked on **firmware/UEFI**, not another 7.2 PAS sequence patch.
-Capture these on the laptop. Do not commit blobs.
+Blocked on **firmware/UEFI** (dtbloader + ALWAYS_START qebspil), not
+another 7.2 PAS sequence patch. Capture these on the laptop. Do not
+commit blobs. Full copy/load steps:
+[qebspil-dtbloader.md](qebspil-dtbloader.md).
 
-### 1. Get a real qebspil EBS log (ConOut, not USB)
+### 1. Stage dtbloader **before** qebspil (the ConOut gap)
 
-`Print()` in `stephan-gh/qebspil` (`Hello World!`, `Found remoteproc`,
-`Starting remoteproc`, `Failed to init firmware … (wrong firmware?)`,
-`Failed to authenticate and start firmware`) goes to the UEFI console.
-A USB stick with only `qebspilaa64.efi` + `startup.nsh` is **not** a
-log. Photograph the panel around ExitBootServices, or use a serial
-console if one exists.
+Previous qebspil-only `load` is **done** (Hello World + SCM, no
+rproc). Next ConOut must show `Detected device` (dtbloader) then
+`qebspil: Found remoteproc: qcom,x1e80100-adsp-pas`. `Starting` /
+AUTH print at late EBS when Limine/UKI exits boot services —
+photograph that handoff.
 
-Must answer:
-
-- Did it print `qebspil: Found remoteproc: qcom,x1e80100-adsp-pas`?
-  If not: the bootloader did not install `EfiDtbTableGuid` (qebspil
-  README: systemd-boot / GRUB / dtbloader / UKI-with-DTB). Limine
-  must install the Linux DTB as that UEFI config table or qebspil
-  never starts ADSP.
-- Did it print `qebspil: Starting remoteproc: qcom,x1e80100-adsp-pas`?
-- `Failed to init firmware for … DTB` vs `…` (main, empty suffix)?
-- `Failed to authenticate and start firmware` for DTB and/or main?
-- Did it stop lite before AUTH_RESET?
+`Print()` goes to UEFI ConOut (screen / serial), not a file next to
+the EFI binary.
 
 ### 2. Rebuild qebspil with ALWAYS_START
 
@@ -502,11 +570,12 @@ make CROSS_COMPILE=aarch64-linux-gnu- QEBSPIL_ALWAYS_START=1
 ```
 
 Vivobook `&remoteproc_adsp` has **no** `qcom,broken-reset`. Stock
-qebspil skips ADSP. Copy new `out/qebspilaa64.efi` next to the ESP
-firmware. Do not add `qcom,broken-reset` to the board DTS as a
-workaround unless that is a deliberate Linux-side policy change.
+qebspil skips ADSP even after the DTB table is installed. Copy new
+`out/qebspilaa64.efi` next to the ESP firmware. Do not add
+`qcom,broken-reset` to the board DTS as a workaround unless that is
+a deliberate Linux-side policy change.
 
-### 3. ESP vs `/lib/firmware` identity (do not commit hashes in a blob)
+### 3. ESP vs `/lib/firmware` identity (already MATCH; re-check if you recopy)
 
 qebspil reads from the **same volume as `qebspilaa64.efi`**:
 
@@ -533,8 +602,9 @@ ls -l /sys/class/remoteproc/remoteproc0/device  # confirm firmware-name
 ```
 
 Both names must exist on the qebspil volume and match Linux (or be a
-known QTI-CASS substitute). `qcadsp8380.mbn` size on the reuse boot
-was **21879224** from Linux `request_firmware`.
+known QTI-CASS substitute). pkgrel 11 already hashed MATCH. Recheck
+only if you recopy. `qcadsp8380.mbn` size on the reuse boot was
+**21879224** from Linux `request_firmware`.
 
 ### 4. After EBS shows AUTH_RESET of 0x1
 
@@ -556,11 +626,17 @@ was **21879224** from Linux `request_firmware`.
 ### 5. What not to do
 
 - Daily boot stays **no flags** (attach-to-lite, charging).
-- Do **not** use `attach_running_main=1` while 0x1 shutdown is -22.
+- Do **not** use `attach_running_main=1` while 0x1 shutdown is -22
+  (0x1 has never AUTH'd on this board).
 - Do **not** add Vivobook sound-card / WSA DTS as the next PAS -22
   step. `CONFIG_RESET_GPIO=y` is already on.
 - Do **not** treat attach-to-lite or REUSE_PARTIAL as a TZ signature
   fix.
+- Do **not** claim another NS `PAS_INIT` kernel tweak publishes
+  `EfiDtbTableGuid` or AUTHs 0x1.
+- Do **not** fork Limine in this repo. A future upstream
+  `InstallConfigurationTable(EfiDtbTableGuid)` is optional; the
+  current path is dtbloader.
 - A full remoteproc-core `RPROC_DETACHED` / Gerhold
   `wip/x1e80100-6.16-el2` backport is the upstream-shaped late-attach;
   pkgrel 11 is the 7.2-sized landing pad for the same moment (main
