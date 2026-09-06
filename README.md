@@ -246,7 +246,8 @@ ELF is expected after tearing down UEFI 0x24. Preferred: main
 `scm_pil_init` failed (no DTB rollback); AUTH-fail of main would
 have dropped 0x24. **HOLD** `attach_running_main`. Next: copy
 [qebspil/qebspilaa64.efi](qebspil/qebspilaa64.efi) over the live
-ALWAYS_START efi (file + efivar main-fail log). No ConOut photo.
+ALWAYS_START efi (ebs-efivar-ram; paste `QebspilAdsp` only). No
+ConOut photo.
 
 See [docs/adsp-22.md](docs/adsp-22.md) and the operator recipe
 [docs/qebspil-dtbloader.md](docs/qebspil-dtbloader.md)
@@ -271,9 +272,9 @@ Daily boot: no extra flags (attach-to-lite). dtbloader then
 ALWAYS_START qebspil is already staged. No-reuse dump: `0x24: 0`,
 `0x1: -22`. Next is copy
 [qebspil/qebspilaa64.efi](qebspil/qebspilaa64.efi) onto the live
-stick (INIT vs AUTH in `\qebspil-adsp.log` / efivar) — not
-`attach_running_main`. After EBS AUTH of 0x1 only: Limine cmdline
-`qcom_q6v5_pas.attach_running_main=1`.
+stick (INIT vs AUTH in efivar `QebspilAdsp`, `dd … skip=4`) — not
+`attach_running_main`, not the USB log. After EBS AUTH of 0x1 only:
+Limine cmdline `qcom_q6v5_pas.attach_running_main=1`.
 
 ## Build and install (on the Vivobook)
 
