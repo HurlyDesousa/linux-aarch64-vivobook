@@ -179,19 +179,39 @@ x1e80100 and, when firmware SOC is missing, returns
 `energy_now/energy_full` percent. Firmware SOC is still preferred when
 full ADSP later provides it. Do not expect `aplay -l` to grow a card.
 
+**7.2.2-9 post-qebspil VERIFY** (same `0001` attach-to-lite): `PAS
+shutdown dtb (id=0x24): 0` (was -22), main 0x1 still -22, TZ still
+rejects NS `adsp_dtbs.elf`, attach-to-lite 0x1f, `aplay -l` empty.
+qebspil left DTB PAS state; `start()` tore it down then failed NS
+PAS_INIT. Not a DTS fix.
+
+**7.2.2-10 (pkgrel 10)** adds
+`0005-x1e-adsp-reuse-authenticated-dtb.patch`: opt-in
+`qcom_q6v5_pas.reuse_authenticated_dtb=1` skips 0x24 teardown + NS DTB
+PAS_INIT and tries main `qcadsp8380.mbn` against the UEFI DTB. Default
+**off** (keep attach-to-lite / charging). ADSP-only (`lite_pas_id`);
+CDSP unchanged. If main PAS_INIT fails, attach-to-lite. If it succeeds,
+lite is stopped before main AUTH_RESET (charging may drop if AUTH_RESET
+then fails). Still not a TZ signature fix.
+
 See [docs/adsp-22.md](docs/adsp-22.md). Patches live at repo root as
-`0001-x1e-adsp-dtb-init-after-power.patch` and
-`0002-qcom-battmgr-capacity-from-energy.patch` (makepkg `source=()`
+`0001-x1e-adsp-dtb-init-after-power.patch`,
+`0002-qcom-battmgr-capacity-from-energy.patch`, and
+`0005-x1e-adsp-reuse-authenticated-dtb.patch` (makepkg `source=()`
 basenames; copies under `patches/` are optional).
 
-After reboot into `7.2.2-4-aarch64-vivobook`:
+After reboot into `7.2.2-10-aarch64-vivobook`:
 
 ```
-dmesg | grep -E 'PAS shutdown|initializing firmware|attaching to'
+dmesg | grep -E 'PAS shutdown|initializing firmware|attaching to|reusing UEFI|reuse DTB'
 cat /sys/class/remoteproc/remoteproc0/state
 cat /sys/class/power_supply/qcom-battmgr-bat/capacity
 aplay -l
 ```
+
+Reuse A/B (post-qebspil only): add
+`qcom_q6v5_pas.reuse_authenticated_dtb=1` to the Limine cmdline. Omit
+it to stay on attach-to-lite.
 
 ## Build and install (on the Vivobook)
 

@@ -1,0 +1,138 @@
+From: Grokbot <grokbot@s-w.art>
+Date: Sun, 6 Sep 2026 19:35:00 +0000
+Subject: [PATCH] remoteproc: qcom_q6v5_pas: reuse UEFI/qebspil ADSP DTB PAS
+
+After qebspil, PAS_SHUTDOWN of dtb id=0x24 returns 0 (TZ had DTB PAS
+state) while main id=0x1 is still -22. start() then tears down 0x24
+and PAS_INITs NS adsp_dtbs.elf, which TZ still rejects.
+
+Add reuse_authenticated_dtb (default N). When set on a rproc that has
+lite_pas_id (ADSP only; CDSP unchanged): skip 0x24 shutdown and NS DTB
+PAS_INIT, then try main MDT load. If main PAS_INIT fails, attach-to-lite
+(lite still running). If it succeeds, stop lite then AUTH_RESET main.
+
+Not a TZ signature fix. Opt-in for post-qebspil A/B.
+
+Signed-off-by: Grokbot <grokbot@s-w.art>
+---
+ drivers/remoteproc/qcom_q6v5_pas.c | 59 +++++++++++++++++++++++++++---
+ 1 file changed, 53 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/remoteproc/qcom_q6v5_pas.c b/drivers/remoteproc/qcom_q6v5_pas.c
+index dff0e05..e0208fa 100644
+--- a/drivers/remoteproc/qcom_q6v5_pas.c
++++ b/drivers/remoteproc/qcom_q6v5_pas.c
+@@ -125,6 +125,11 @@ module_param(attach_lite_on_dtb_fail, bool, 0644);
+ MODULE_PARM_DESC(attach_lite_on_dtb_fail,
+ 		 "Attach to UEFI lite ADSP if DTB PAS_INIT fails (default Y)");
+ 
++static bool reuse_authenticated_dtb;
++module_param(reuse_authenticated_dtb, bool, 0644);
++MODULE_PARM_DESC(reuse_authenticated_dtb,
++		 "Reuse UEFI/qebspil ADSP DTB PAS; skip 0x24 shutdown and NS DTB PAS_INIT (default N)");
++
+ static void qcom_pas_segment_dump(struct rproc *rproc,
+ 				  struct rproc_dump_segment *segment,
+ 				  void *dest, size_t offset, size_t size)
+@@ -235,13 +240,19 @@ static void qcom_pas_try_shutdown(struct qcom_pas *pas, int pas_id,
+ 		 what, pas_id, ret);
+ }
+ 
++static bool qcom_pas_should_reuse_dtb(const struct qcom_pas *pas)
++{
++	/* ADSP only. CDSP has dtb_pas_id but no lite_pas_id. */
++	return reuse_authenticated_dtb && pas->dtb_pas_id && pas->lite_pas_id;
++}
++
+ static bool qcom_pas_try_attach_lite(struct qcom_pas *pas, int dtb_err)
+ {
+ 	if (!attach_lite_on_dtb_fail || !pas->lite_pas_id)
+ 		return false;
+ 
+ 	dev_err(pas->dev,
+-		"TZ rejected ADSP DTB (err=%d); attaching to UEFI lite ADSP (PAS 0x%x) so GLINK/battmgr can work\n",
++		"full ADSP start failed (err=%d); attaching to UEFI lite ADSP (PAS 0x%x) so GLINK/battmgr can work\n",
+ 		dtb_err, pas->lite_pas_id);
+ 	dev_warn(pas->dev,
+ 		 "attach-to-lite fallback, not a TZ signature fix; full audio ADSP still needs a TZ-accepted DTB\n");
+@@ -315,17 +326,25 @@ static int qcom_pas_start(struct rproc *rproc)
+ 	/*
+ 	 * UEFI starts lite ADSP for charging. Do not PAS_INIT the replacement
+ 	 * DTB until proxy PDs and XO are on. Do not shut down lite until DTB
+-	 * PAS_INIT succeeds. attach_lite_on_dtb_fail=0 restores
+-	 * kill-lite-then-init.
++	 * PAS_INIT succeeds (or, with reuse_authenticated_dtb, until main
++	 * PAS_INIT succeeds). attach_lite_on_dtb_fail=0 restores
++	 * kill-lite-then-init. reuse_authenticated_dtb=1 skips tearing down
++	 * an already-authenticated UEFI/qebspil DTB and skips NS
++	 * adsp_dtbs.elf PAS_INIT (TZ rejects that ELF from Linux NS).
+ 	 */
+ 	if (!attach_lite_on_dtb_fail) {
+ 		qcom_pas_try_shutdown(pas, pas->lite_pas_id, "lite");
+ 		qcom_pas_try_shutdown(pas, pas->lite_dtb_pas_id, "lite-dtb");
+ 	}
+-	qcom_pas_try_shutdown(pas, pas->dtb_pas_id, "dtb");
++	if (qcom_pas_should_reuse_dtb(pas))
++		dev_info(pas->dev,
++			 "reusing UEFI/qebspil DTB PAS (id=0x%x); skip teardown + NS %s PAS_INIT\n",
++			 pas->dtb_pas_id, pas->dtb_firmware_name);
++	else
++		qcom_pas_try_shutdown(pas, pas->dtb_pas_id, "dtb");
+ 	qcom_pas_try_shutdown(pas, pas->pas_id, "main");
+ 
+-	if (pas->dtb_pas_id) {
++	if (pas->dtb_pas_id && !qcom_pas_should_reuse_dtb(pas)) {
+ 		ret = request_firmware(&pas->dtb_firmware, pas->dtb_firmware_name,
+ 				       pas->dev);
+ 		if (ret) {
+@@ -361,15 +380,28 @@ static int qcom_pas_start(struct rproc *rproc)
+ 				"failed to authenticate dtb image and release reset\n");
+ 			goto unmap_dtb_carveout;
+ 		}
+-	} else {
++	} else if (!pas->dtb_pas_id) {
+ 		qcom_pas_try_shutdown(pas, pas->lite_pas_id, "lite");
+ 		qcom_pas_try_shutdown(pas, pas->lite_dtb_pas_id, "lite-dtb");
+ 	}
+ 
+ 	ret = qcom_mdt_pas_load(pas->pas_ctx, pas->firmware, rproc->firmware,
+ 				pas->mem_region, &pas->mem_reloc);
+-	if (ret)
++	if (ret) {
++		if (qcom_pas_should_reuse_dtb(pas) &&
++		    qcom_pas_try_attach_lite(pas, ret))
++			return 0;
+ 		goto release_pas_metadata;
++	}
++
++	if (qcom_pas_should_reuse_dtb(pas)) {
++		/*
++		 * qebspil AUTH_RESETs full ADSP only after stopping lite.
++		 * Main metadata is accepted; drop lite before AUTH_RESET.
++		 */
++		qcom_pas_try_shutdown(pas, pas->lite_pas_id, "lite");
++		qcom_pas_try_shutdown(pas, pas->lite_dtb_pas_id, "lite-dtb");
++	}
+ 
+ 	qcom_pil_info_store(pas->info_name, pas->mem_phys, pas->mem_size);
+ 
+@@ -381,6 +413,9 @@ static int qcom_pas_start(struct rproc *rproc)
+ 	if (ret) {
+ 		dev_err(pas->dev,
+ 			"failed to authenticate image and release reset\n");
++		if (qcom_pas_should_reuse_dtb(pas))
++			dev_err(pas->dev,
++				"reuse DTB path: lite already stopped; not attaching to lite\n");
+ 		goto unmap_carveout;
+ 	}
+ 
+@@ -388,6 +423,9 @@ static int qcom_pas_start(struct rproc *rproc)
+ 	if (ret == -ETIMEDOUT) {
+ 		dev_err(pas->dev, "start timed out\n");
+ 		qcom_scm_pas_shutdown(pas->pas_id);
++		if (qcom_pas_should_reuse_dtb(pas))
++			dev_err(pas->dev,
++				"reuse DTB path: lite already stopped; not attaching to lite\n");
+ 		goto unmap_carveout;
+ 	}
+ 
