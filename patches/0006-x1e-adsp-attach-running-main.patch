@@ -1,0 +1,100 @@
+From: Grokbot <grokbot@s-w.art>
+Date: Sun, 6 Sep 2026 22:10:00 +0000
+Subject: [PATCH] remoteproc: qcom_q6v5_pas: attach to UEFI/qebspil main ADSP
+
+REUSE_PARTIAL (pkgrel 10 reuse_authenticated_dtb=1): skip 0x24 teardown
+worked; NS PAS_INIT of OEM qcadsp8380.mbn still -22; main shutdown 0x1
+stayed -22. Linux NS cannot PAS_INIT that MBN. Next is UEFI AUTH_RESET
+of main 0x1, then Linux attach without tearing it down.
+
+Add attach_running_main (default N). When set on a rproc that has
+lite_pas_id (ADSP only; CDSP unchanged): skip PAS_SHUTDOWN of 0x24/0x1,
+skip NS PAS_INIT of DTB and main, skip AUTH_RESET, return 0 like
+attach-to-lite. stop() does not PAS_SHUTDOWN main.
+
+Use only after qebspil EBS shows AUTH_RESET of PAS 0x1. If 0x1 is not
+running this is not lite and GLINK/charging may break. Do not combine
+with reuse_authenticated_dtb=1 after 0x1 is up (that path still
+PAS_SHUTDOWN main).
+
+Not a TZ signature fix. Not a sound-card DTS change.
+
+Signed-off-by: Grokbot <grokbot@s-w.art>
+---
+ drivers/remoteproc/qcom_q6v5_pas.c | 36 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 36 insertions(+)
+
+diff --git a/drivers/remoteproc/qcom_q6v5_pas.c b/drivers/remoteproc/qcom_q6v5_pas.c
+--- a/drivers/remoteproc/qcom_q6v5_pas.c
++++ b/drivers/remoteproc/qcom_q6v5_pas.c
+@@ -84,6 +84,7 @@
+ 	int lite_pas_id;
+ 	int lite_dtb_pas_id;
+ 	bool lite_attached;
++	bool main_attached;
+ 	unsigned int minidump_id;
+ 	int crash_reason_smem;
+ 	unsigned int smem_host_id;
+@@ -130,6 +131,11 @@
+ MODULE_PARM_DESC(reuse_authenticated_dtb,
+ 		 "Reuse UEFI/qebspil ADSP DTB PAS; skip 0x24 shutdown and NS DTB PAS_INIT (default N)");
+ 
++static bool attach_running_main;
++module_param(attach_running_main, bool, 0644);
++MODULE_PARM_DESC(attach_running_main,
++		 "Attach to UEFI/qebspil main ADSP; skip teardown + NS PAS_INIT (default N)");
++
+ static void qcom_pas_segment_dump(struct rproc *rproc,
+ 				  struct rproc_dump_segment *segment,
+ 				  void *dest, size_t offset, size_t size)
+@@ -246,6 +252,12 @@
+ 	return reuse_authenticated_dtb && pas->dtb_pas_id && pas->lite_pas_id;
+ }
+ 
++static bool qcom_pas_should_attach_main(const struct qcom_pas *pas)
++{
++	/* ADSP only. Do not claim CDSP was early-booted. */
++	return attach_running_main && pas->lite_pas_id && pas->pas_id;
++}
++
+ static bool qcom_pas_try_attach_lite(struct qcom_pas *pas, int dtb_err)
+ {
+ 	if (!attach_lite_on_dtb_fail || !pas->lite_pas_id)
+@@ -331,7 +343,22 @@
+ 	 * kill-lite-then-init. reuse_authenticated_dtb=1 skips tearing down
+ 	 * an already-authenticated UEFI/qebspil DTB and skips NS
+ 	 * adsp_dtbs.elf PAS_INIT (TZ rejects that ELF from Linux NS).
++	 * attach_running_main=1 skips teardown + NS PAS_INIT of main too
++	 * and attaches to a UEFI-started PAS 0x1 (only after qebspil
++	 * AUTH_RESET of main; do not use while 0x1 shutdown is still -22).
+ 	 */
++	if (qcom_pas_should_attach_main(pas)) {
++		dev_info(pas->dev,
++			 "attaching to UEFI/qebspil main ADSP (PAS 0x%x); skip teardown + NS PAS_INIT + AUTH_RESET\n",
++			 pas->pas_id);
++		dev_warn(pas->dev,
++			 "attach_running_main: use only after qebspil AUTH_RESET of main 0x1; if 0x1 is not running this is not lite and GLINK/charging may break\n");
++		pas->main_attached = true;
++		pas->q6v5.handover_issued = true;
++		pas->firmware = NULL;
++		return 0;
++	}
++
+ 	if (!attach_lite_on_dtb_fail) {
+ 		qcom_pas_try_shutdown(pas, pas->lite_pas_id, "lite");
+ 		qcom_pas_try_shutdown(pas, pas->lite_dtb_pas_id, "lite-dtb");
+@@ -507,6 +534,14 @@
+ 		qcom_q6v5_unprepare(&pas->q6v5);
+ 		return 0;
+ 	}
++
++	if (pas->main_attached) {
++		dev_warn(pas->dev,
++			 "leaving UEFI/qebspil main ADSP running (skip PAS shutdown)\n");
++		pas->main_attached = false;
++		qcom_q6v5_unprepare(&pas->q6v5);
++		return 0;
++	}
+ 
+ 	ret = qcom_q6v5_request_stop(&pas->q6v5, pas->sysmon);
+ 	if (ret == -ETIMEDOUT)

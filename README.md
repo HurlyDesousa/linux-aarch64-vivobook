@@ -194,24 +194,43 @@ CDSP unchanged. If main PAS_INIT fails, attach-to-lite. If it succeeds,
 lite is stopped before main AUTH_RESET (charging may drop if AUTH_RESET
 then fails). Still not a TZ signature fix.
 
-See [docs/adsp-22.md](docs/adsp-22.md). Patches live at repo root as
+**7.2.2-10 REUSE_PARTIAL VERIFY** (Omarchy, live): reuse line hit;
+`PAS shutdown main (id=0x1): -22`; `error -22 initializing
+.../qcadsp8380.mbn`; attach-to-lite; `aplay -l` empty. CDSP main 0x12
+came up. No qebspil EBS AUTH log on USB (ConOut only). Linux NS cannot
+`PAS_INIT` the OEM main MBN. Not a limine/pkg miss; not a sound DTS
+fix. Next is UEFI/qebspil AUTH_RESET of **main PAS 0x1**, then Linux
+attach.
+
+**7.2.2-11 (pkgrel 11)** adds
+`0006-x1e-adsp-attach-running-main.patch`: opt-in
+`qcom_q6v5_pas.attach_running_main=1` skips teardown + NS PAS_INIT of
+DTB **and** main and attaches to a UEFI-started PAS 0x1. Default
+**off**. **Do not enable** while 0x1 shutdown is still -22 (not lite;
+charging/GLINK may break). After EBS shows AUTH of 0x1, use this flag
+**alone** — do not also set `reuse_authenticated_dtb=1` (that path
+still `PAS_SHUTDOWN`s main). CDSP unchanged.
+
+See [docs/adsp-22.md](docs/adsp-22.md) for the Omarchy/Toby EBS
+checklist (ALWAYS_START, ConOut log, ESP vs `/lib/firmware` hashes).
+Patches live at repo root as
 `0001-x1e-adsp-dtb-init-after-power.patch`,
-`0002-qcom-battmgr-capacity-from-energy.patch`, and
-`0005-x1e-adsp-reuse-authenticated-dtb.patch` (makepkg `source=()`
+`0002-qcom-battmgr-capacity-from-energy.patch`,
+`0005-x1e-adsp-reuse-authenticated-dtb.patch`, and
+`0006-x1e-adsp-attach-running-main.patch` (makepkg `source=()`
 basenames; copies under `patches/` are optional).
 
-After reboot into `7.2.2-10-aarch64-vivobook`:
+After reboot into `7.2.2-11-aarch64-vivobook`:
 
 ```
-dmesg | grep -E 'PAS shutdown|initializing firmware|attaching to|reusing UEFI|reuse DTB'
+dmesg | grep -E 'PAS shutdown|initializing firmware|attaching to|reusing UEFI|attach_running_main'
 cat /sys/class/remoteproc/remoteproc0/state
 cat /sys/class/power_supply/qcom-battmgr-bat/capacity
 aplay -l
 ```
 
-Reuse A/B (post-qebspil only): add
-`qcom_q6v5_pas.reuse_authenticated_dtb=1` to the Limine cmdline. Omit
-it to stay on attach-to-lite.
+Daily boot: no extra flags (attach-to-lite). After qebspil AUTH of
+0x1 only: Limine cmdline `qcom_q6v5_pas.attach_running_main=1`.
 
 ## Build and install (on the Vivobook)
 
