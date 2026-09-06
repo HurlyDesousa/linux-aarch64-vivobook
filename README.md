@@ -234,15 +234,16 @@ NS `PAS_INIT` tweak as a table fix.
 
 **7.2.2-11 dtbloader VERIFY** (pkgrel 11 held): after dtbloader →
 ALWAYS_START qebspil → Limine, ConOut **`Found remoteproc` OK**
-(adsp+cdsp). That is enumerate+prepare only — **not AUTH**. Same
-boot with `reuse_authenticated_dtb=1`: reuse line, `PAS shutdown
-main (id=0x1): -22`, attach-to-lite, Dummy / no cards. reuse
-**skips** 0x24 shutdown, so this boot does **not** prove DTB AUTH.
-`systab` still no `DTB=` (post-EBS; secondary). Late-EBS ConOut
-(`Starting remoteproc` / INIT / AUTH at Limine→UKI) **not captured
-yet**. Insyde + qebspil `event.c` TPL poke is suspect if there is
-no `Starting`. Firmware must sit on the same FAT as
-`qebspilaa64.efi` under
+(adsp+cdsp). That is enumerate+prepare only — **not AUTH**. Late-EBS
+ConOut **not captured** (load-time Found only). Omarchy reuse=1
+dmesg: `reusing UEFI/qebspil DTB PAS (id=0x24); skip teardown + NS
+… adsp_dtbs.elf PAS_INIT`; `PAS shutdown main (id=0x1): -22`;
+error initializing `qcadsp8380.mbn`; attach-to-lite. **No**
+`PAS shutdown dtb (id=0x24): 0` on this boot — reuse skipped
+teardown. CDSP: dtb `0x25` -22; main `0x12` 0. Dummy / no cards.
+`systab` still no `DTB=` (post-EBS; secondary). Insyde + qebspil
+`event.c` TPL poke is suspect if there is no `Starting`. Firmware
+must sit on the same FAT as `qebspilaa64.efi` under
 `/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/`. **HOLD**
 `attach_running_main`. Next: one Limine→UKI ConOut photo (or one
 no-reuse boot to read `PAS shutdown dtb 0x24` vs main 0x1).

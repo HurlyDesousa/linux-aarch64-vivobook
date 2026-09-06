@@ -219,10 +219,19 @@ aplay -l
 Daily Limine entry: **no extra flags** (attach-to-lite / charging).
 
 **reuse=1 does not prove DTB AUTH.** That path skips `PAS_SHUTDOWN`
-of 0x24. Live reuse boot: reuse line + `PAS shutdown main (id=0x1):
--22` + lite. That only shows main was never up. Use ConOut (§ above)
-to know if late EBS ran. `systab` still missing `DTB=` after EBS is
-secondary (UKI / post-EBS), not the AUTH gate.
+of 0x24. Omarchy this-boot dmesg (late-EBS ConOut **not** captured):
+
+```
+reusing UEFI/qebspil DTB PAS (id=0x24); skip teardown + NS … adsp_dtbs.elf PAS_INIT
+PAS shutdown main (id=0x1): -22
+error initializing firmware …/qcadsp8380.mbn
+attaching to UEFI lite ADSP
+```
+
+This boot did **not** print `PAS shutdown dtb (id=0x24): 0` — reuse
+skipped teardown. CDSP: dtb `0x25` **-22**; main `0x12` **0**. Use
+ConOut (§ above) to know if late EBS ran. `systab` still missing
+`DTB=` after EBS is secondary (UKI / post-EBS), not the AUTH gate.
 
 ### Omarchy A/B if the photo is impossible
 
