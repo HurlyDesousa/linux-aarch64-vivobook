@@ -244,10 +244,9 @@ attach-to-lite; Dummy. Late EBS **ran**; DTB left up; main never
 left up. Insyde TPL is **not** totally dead. NS `-22` on the DTB
 ELF is expected after tearing down UEFI 0x24. Preferred: main
 `scm_pil_init` failed (no DTB rollback); AUTH-fail of main would
-have dropped 0x24. **HOLD** `attach_running_main`. Next: one
-Limine→UKI ConOut photo of the **main** Failed line (`Failed to
-init firmware for qcom,x1e80100-adsp-pas:` vs `Failed to
-authenticate and start firmware …`, empty suffix).
+have dropped 0x24. **HOLD** `attach_running_main`. Next: copy
+[qebspil/qebspilaa64.efi](qebspil/qebspilaa64.efi) over the live
+ALWAYS_START efi (file + efivar main-fail log). No ConOut photo.
 
 See [docs/adsp-22.md](docs/adsp-22.md) and the operator recipe
 [docs/qebspil-dtbloader.md](docs/qebspil-dtbloader.md)
@@ -270,9 +269,10 @@ aplay -l
 
 Daily boot: no extra flags (attach-to-lite). dtbloader then
 ALWAYS_START qebspil is already staged. No-reuse dump: `0x24: 0`,
-`0x1: -22`. Next is a Limine→UKI ConOut photo of the **main**
-Failed line (INIT vs AUTH) — not `attach_running_main`. After EBS
-AUTH of 0x1 only: Limine cmdline
+`0x1: -22`. Next is copy
+[qebspil/qebspilaa64.efi](qebspil/qebspilaa64.efi) onto the live
+stick (INIT vs AUTH in `\qebspil-adsp.log` / efivar) — not
+`attach_running_main`. After EBS AUTH of 0x1 only: Limine cmdline
 `qcom_q6v5_pas.attach_running_main=1`.
 
 ## Build and install (on the Vivobook)

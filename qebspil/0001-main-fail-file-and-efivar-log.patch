@@ -1,0 +1,301 @@
+diff --git a/Makefile b/Makefile
+index 4977828..2754e1c 100644
+--- a/Makefile
++++ b/Makefile
+@@ -37,6 +37,7 @@ QEBSPIL_OBJS := \
+ 	src/dtb.o \
+ 	src/event.o \
+ 	src/fw.o \
++	src/log.o \
+ 	src/main.o \
+ 	src/pil.o \
+ 	src/pil-types.o \
+diff --git a/src/dtb.c b/src/dtb.c
+index 294395e..4e40343 100644
+--- a/src/dtb.c
++++ b/src/dtb.c
+@@ -44,6 +44,9 @@ static EFI_STATUS dtb_load_pil_data(struct dtb_context *ctx, int node, struct pi
+ 		return EFI_INVALID_PARAMETER;
+ 
+ 	Print(u"Firmware %d: base 0x%x, size 0x%x, path %a\n", idx, fw->mem_addr, fw->mem_size, fw_name);
++	qebspil_logf("qebspil: Firmware %d [%a] base=0x%x size=0x%x path=%a",
++		     idx, idx ? "DTB" : "MAIN", fw->mem_addr, fw->mem_size, fw_name);
++	qebspil_log_persist();
+ 	return fw_prepare(fw, ctx->root_dir, fw_name);
+ }
+ 
+diff --git a/src/log.c b/src/log.c
+new file mode 100644
+index 0000000..e99a11b
+--- /dev/null
++++ b/src/log.c
+@@ -0,0 +1,98 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Persist pil_finish stages so Omarchy can read INIT vs AUTH without ConOut.
++ * File: \qebspil-adsp.log on the same volume as qebspilaa64.efi (best-effort
++ * at late EBS — FAT may already be down). EFI var QebspilAdsp survives EBS.
++ */
++
++#include <stdarg.h>
++
++#include <efi.h>
++#include <efilib.h>
++
++#include "qebspil.h"
++
++#define LOG_PATH u"\\qebspil-adsp.log"
++#define LOG_MAX 4096
++
++static CHAR8 logbuf[LOG_MAX];
++static UINTN loglen;
++
++static EFI_GUID qebspil_log_guid = {
++	0x6b7c0a11, 0x24e1, 0x4a01,
++	{ 0x9e, 0x80, 0x11, 0xad, 0x50, 0x01, 0x00, 0x24 }
++};
++
++void qebspil_log(const char *line)
++{
++	UINTN n = 0;
++
++	while (line[n])
++		n++;
++
++	if (loglen + n + 2 <= LOG_MAX) {
++		CopyMem(logbuf + loglen, (VOID *)line, n);
++		loglen += n;
++		logbuf[loglen++] = '\n';
++		logbuf[loglen] = 0;
++	}
++
++	Print(u"%a\n", line);
++}
++
++void qebspil_logf(const char *fmt, ...)
++{
++	va_list ap;
++	CHAR8 line[256];
++
++	va_start(ap, fmt);
++	AsciiVSPrint(line, sizeof(line), (const CHAR8 *)fmt, ap);
++	va_end(ap);
++	qebspil_log((const char *)line);
++}
++
++void qebspil_log_persist(void)
++{
++	EFI_STATUS st;
++	EFI_FILE_HANDLE root, file;
++	UINTN size;
++
++	if (!loglen)
++		return;
++
++	st = RT->SetVariable(u"QebspilAdsp", &qebspil_log_guid,
++			     EFI_VARIABLE_NON_VOLATILE |
++			     EFI_VARIABLE_BOOTSERVICE_ACCESS |
++			     EFI_VARIABLE_RUNTIME_ACCESS,
++			     loglen, logbuf);
++	Print(u"qebspil: log var persist: %r (%d bytes)\n", st, loglen);
++
++	if (!LoadedImage)
++		return;
++
++	root = LibOpenRoot(LoadedImage->DeviceHandle);
++	if (!root) {
++		Print(u"qebspil: log file: no root\n");
++		return;
++	}
++
++	st = root->Open(root, &file, LOG_PATH,
++			EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
++	if (!EFI_ERROR(st))
++		file->Delete(file);
++
++	st = root->Open(root, &file, LOG_PATH,
++			EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE,
++			0);
++	if (EFI_ERROR(st)) {
++		Print(u"qebspil: log file open: %r\n", st);
++		root->Close(root);
++		return;
++	}
++
++	size = loglen;
++	st = file->Write(file, &size, logbuf);
++	file->Close(file);
++	root->Close(root);
++	Print(u"qebspil: log file persist: %r wrote %d\n", st, size);
++}
+diff --git a/src/main.c b/src/main.c
+index 8262564..21358f2 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -15,7 +15,12 @@ static EFI_STATUS efi_late_ebs(void)
+ {
+ 	EFI_STATUS status;
+ 
++	qebspil_log("qebspil: late-EBS enter");
++	qebspil_log_persist();
++
+ 	status = pil_finish_all();
++	qebspil_logf("qebspil: late-EBS pil_finish_all status=0x%lx", (UINTN)status);
++	qebspil_log_persist();
+ 	if (status == EFI_NOT_FOUND)
+ 		return EFI_SUCCESS; /* No rempteprocs found */
+ 	if (!EFI_ERROR(status))
+@@ -66,6 +71,7 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
+ 	InitializeLib(image, system_table);
+ 
+ 	Print(u"Hello World!\n");
++	qebspil_log("qebspil: main-fail-log build (file+efivar)");
+ 
+ 	status = BS->HandleProtocol(image, &LoadedImageProtocol, (VOID**)&LoadedImage);
+ 	if (EFI_ERROR(status))
+diff --git a/src/pil.c b/src/pil.c
+index 1a7d7d4..9cc3fe3 100644
+--- a/src/pil.c
++++ b/src/pil.c
+@@ -14,10 +14,19 @@
+ static struct pil loaded_pil[MAX_PIL_NUM];
+ 
+ static const char *const pil_component_names[PIL_COMPONENTS] = {
+-	" DTB",
+-	"",
++	"DTB",
++	"MAIN",
+ };
+ 
++static void pil_log_stage(const struct pil *pil, enum pil_component c,
++			  const char *stage, EFI_STATUS status)
++{
++	qebspil_logf("qebspil: %a [%a] pas=0x%x stage=%a status=0x%lx",
++		     pil->type->compatible, pil_component_names[c],
++		     pil->type->id[c].full, stage, (UINTN)status);
++	qebspil_log_persist();
++}
++
+ struct pil *pil_alloc(const struct pil_type *type)
+ {
+ 	for (UINTN i = 0; i < ARRAY_SIZE(loaded_pil); i++) {
+@@ -96,18 +105,17 @@ static EFI_STATUS pil_finish(struct pil *pil)
+ {
+ 	EFI_STATUS status;
+ 
+-	Print(u"qebspil: Starting remoteproc: %a\n", pil->type->compatible);
++	qebspil_logf("qebspil: Starting remoteproc: %a", pil->type->compatible);
++	qebspil_log_persist();
+ 
+ 	for (enum pil_component c = 0; c < PIL_COMPONENTS; c++) {
+ 		if (!pil_has_component(pil, c))
+ 			continue;
+ 
+ 		status = fw_check(&pil->fw[c]);
+-		if (EFI_ERROR(status)) {
+-			Print(u"qebspil: Firmware check failed for %a%a: %r\n",
+-			      pil->type->compatible, pil_component_names[c], status);
++		pil_log_stage(pil, c, "fw_check", status);
++		if (EFI_ERROR(status))
+ 			return status;
+-		}
+ 	}
+ 
+ 	for (enum pil_component c = 0; c < PIL_COMPONENTS; c++) {
+@@ -115,11 +123,9 @@ static EFI_STATUS pil_finish(struct pil *pil)
+ 			continue;
+ 
+ 		status = fw_load_metadata(&pil->fw[c]);
+-		if (EFI_ERROR(status)) {
+-			Print(u"qebspil: Failed to load firmware metadata for %a%a: %r\n",
+-			      pil->type->compatible, pil_component_names[c], status);
++		pil_log_stage(pil, c, "metadata", status);
++		if (EFI_ERROR(status))
+ 			return status;
+-		}
+ 	}
+ 
+ 	for (enum pil_component c = 0; c < PIL_COMPONENTS; c++) {
+@@ -129,18 +135,14 @@ static EFI_STATUS pil_finish(struct pil *pil)
+ 			continue;
+ 
+ 		status = scm_pil_init(pil->type->id[c].full, fw->metadata);
+-		if (EFI_ERROR(status)) {
+-			Print(u"qebspil: Failed to init firmware for %a%a: %r (wrong firmware?)\n",
+-			      pil->type->compatible, pil_component_names[c], status);
++		pil_log_stage(pil, c, "INIT", status);
++		if (EFI_ERROR(status))
+ 			return status;
+-		}
+ 
+ 		status = scm_pil_mem_setup(pil->type->id[c].full, fw->mem_addr, fw->mem_size);
+-		if (EFI_ERROR(status)) {
+-			Print(u"qebspil: Failed to setup memory area for %a%a: %r\n",
+-			      pil->type->compatible, pil_component_names[c], status);
++		pil_log_stage(pil, c, "mem_setup", status);
++		if (EFI_ERROR(status))
+ 			return status;
+-		}
+ 	}
+ 
+ 	for (enum pil_component c = 0; c < PIL_COMPONENTS; c++) {
+@@ -148,11 +150,9 @@ static EFI_STATUS pil_finish(struct pil *pil)
+ 			continue;
+ 
+ 		status = fw_load(&pil->fw[c]);
+-		if (EFI_ERROR(status)) {
+-			Print(u"qebspil: Failed to load firmware for %a%a: %r\n",
+-			      pil->type->compatible, pil_component_names[c], status);
++		pil_log_stage(pil, c, "fw_load", status);
++		if (EFI_ERROR(status))
+ 			return status;
+-		}
+ 	}
+ 
+ 	/* Stop lite firmware in reverse order (full first, then DTB) */
+@@ -161,7 +161,8 @@ static EFI_STATUS pil_finish(struct pil *pil)
+ 			continue;
+ 
+ 		/* Ignore return status since we don't know if lite was running */
+-		scm_pil_stop(pil->type->id[b - 1].lite);
++		status = scm_pil_stop(pil->type->id[b - 1].lite);
++		pil_log_stage(pil, b - 1, "stop_lite", status);
+ 	}
+ 
+ 	for (enum pil_component c = 0; c < PIL_COMPONENTS; c++) {
+@@ -169,10 +170,8 @@ static EFI_STATUS pil_finish(struct pil *pil)
+ 			continue;
+ 
+ 		status = scm_pil_start(pil->type->id[c].full);
++		pil_log_stage(pil, c, "AUTH", status);
+ 		if (EFI_ERROR(status)) {
+-			Print(u"qebspil: Failed to authenticate and start firmware for %a%a: %r\n",
+-			      pil->type->compatible, pil_component_names[c], status);
+-
+ 			/* Rollback */
+ 			for (enum pil_component b = c; b > 0; b--)
+ 				if (pil_has_component(pil, b - 1))
+@@ -182,6 +181,8 @@ static EFI_STATUS pil_finish(struct pil *pil)
+ 		}
+ 	}
+ 
++	qebspil_logf("qebspil: %a AUTH ok (DTB+MAIN)", pil->type->compatible);
++	qebspil_log_persist();
+ 	return EFI_SUCCESS;
+ }
+ 
+diff --git a/src/qebspil.h b/src/qebspil.h
+index 17265d6..4280891 100644
+--- a/src/qebspil.h
++++ b/src/qebspil.h
+@@ -38,6 +38,10 @@ struct pil {
+ 
+ extern EFI_LOADED_IMAGE_PROTOCOL *LoadedImage;
+ 
++void qebspil_log(const char *line);
++void qebspil_logf(const char *fmt, ...);
++void qebspil_log_persist(void);
++
+ EFI_STATUS dtb_enumerate_rprocs(const void *dtb);
+ 
+ typedef EFI_STATUS (*event_callback_fn)(void);
