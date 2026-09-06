@@ -6,9 +6,12 @@ Do **not** commit Qualcomm/ASUS firmware blobs.
 dtbloader → ALWAYS_START is **done** (`Found remoteproc` adsp+cdsp).
 That line is prepare only. USB `/firmware/...` next to qebspil
 **MATCH**es `/lib/firmware` — missing/wrong-path firmware is
-**closed**. Remaining branches: late EBS never fired (Insyde/TPL)
-vs late EBS Failed init/auth for main. Still need ConOut lines or
-a no-reuse PAS dump. **HOLD** `attach_running_main`.
+**closed**. No-reuse default boot **landed**: `PAS shutdown dtb
+(id=0x24): 0` + `main (id=0x1): -22` + NS `-22` on `adsp_dtbs.elf`
+→ attach-to-lite. Late EBS **ran**; Insyde TPL is **not** totally
+dead. Main never left up. Next gate: ConOut Failed line for
+**main** INIT vs AUTH (INIT-fail preferred — no DTB rollback).
+**HOLD** `attach_running_main`.
 
 ## Why this recipe exists
 
@@ -151,7 +154,9 @@ adsp+cdsp and still land on lite / Dummy Output.
 `Starting remoteproc` and INIT / AUTH print only at **late
 ExitBootServices** (`efi_late_ebs` → `pil_finish_all` →
 `pil_finish`). That is the Limine → UKI handoff, not `load` time.
-That screen is the current gap.
+No-reuse `0x24: 0` means that callback **ran**. The remaining
+photo is the **main** Failed line (empty suffix), not whether
+`Starting` appeared.
 
 ## Late EBS is the AUTH gate (`pil_finish`)
 
@@ -167,44 +172,49 @@ first (ConOut suffix ` DTB`) then main (empty suffix):
    `Failed to authenticate and start firmware for …` and rollback
    prior full components
 
-Hypothesis that matches a later no-reuse `PAS shutdown dtb 0x24 = 0`
-plus live `main 0x1 = -22`: late EBS at least INITed DTB 0x24; main
-INIT or AUTH failed (or never reached); DTB left up. The reuse=1
-boot does **not** prove that (it never shuts 0x24 down). Exact fail
-line = Toby ConOut photo.
+No-reuse dump **landed**: `PAS shutdown dtb (id=0x24): 0` and
+`main (id=0x1): -22`. Late EBS ran; DTB left up; main never left
+up. INIT-fail of main has **no** rollback (matches LIVE). AUTH-fail
+of main **stops** DTB (would predict `0x24: -22`). Exact fail line
+= Toby ConOut photo of the **empty-suffix** Failed line.
 
 `efi_late_ebs` (`src/main.c`): SUCCESS returns immediately.
 `BS->Stall(500ms)` is only on the error path (inverted vs the
 "wait for handover" comment). Documented upstream quirk — do not
 patch qebspil here unless asked.
 
-### Insyde + TPL hack
+### Insyde + TPL hack (retired as primary)
 
 `src/event.c` registers `EXIT_BOOT_SERVICES` at `EFI_TPL_CALLBACK`
 then pokes EDK2 `IEVENT.NotifyTpl` to `CALLBACK-1`. Comment: may
-not work off EDK2. Vivobook is **Insyde 2.9**. Mismatch prints
-`Unexpected IEvent structure (not edk2)?` and late EBS may never
-run. **No `Starting` after Found adsp+cdsp** → treat this as
-suspect before blaming firmware or Linux.
+not work off EDK2. Vivobook is **Insyde 2.9**. A **totally dead**
+TPL poke is **retired**: no-reuse `0x24: 0` means `pil_finish`
+ran. TPL can still be flaky; it is not the “0x24 up, 0x1 never”
+explanation.
 
-## Photograph this (Toby / Omarchy — preferred)
+## Photograph this (Toby / Omarchy — **the** next boot)
 
-One photo (or burst) through Limine pick → UKI. Read these lines:
+One photo (or burst) through Limine pick → UKI on the **default**
+entry (no reuse). `Starting remoteproc` is now **expected**. Capture
+the **main** Failed line (empty suffix, no ` DTB`):
 
-| ConOut | meaning |
-|--------|---------|
-| no `Starting remoteproc` after Found adsp+cdsp | late EBS never ran (TPL/Insyde) or the handoff scrolled off |
-| `Unexpected IEvent structure (not edk2)?` | TPL poke unsafe on Insyde |
-| `Starting remoteproc: qcom,x1e80100-adsp-pas` | late EBS **did** enter `pil_finish` for ADSP |
-| `Failed to init firmware for … DTB` `(wrong firmware?)` | DTB INIT failed |
-| `Failed to init firmware for qcom,x1e80100-adsp-pas:` (no ` DTB`) | main INIT failed; DTB INIT already done; DTB left up |
-| `Failed to authenticate and start firmware for …` | `AUTH_RESET` failed (DTB vs main by suffix) |
-| `Starting` and no Failed-* for ADSP | claims AUTH of 0x24 **and** 0x1 |
+| ConOut (after `Starting … adsp-pas`) | meaning | vs no-reuse LIVE |
+|--------|---------|------------------|
+| `Failed to init firmware for qcom,x1e80100-adsp-pas:` `(wrong firmware?)` | main INIT failed; DTB **not** rolled back | **preferred** (`0x24: 0`, `0x1: -22`) |
+| `Failed to authenticate and start firmware for qcom,x1e80100-adsp-pas:` | main AUTH failed; qebspil **stops DTB** | would predict `0x24: -22` |
+| `Failed to init/authenticate … DTB` | DTB never left up | contradicts `0x24: 0` |
+| `Starting` and no Failed-* for ADSP | claims AUTH of 0x24 **and** 0x1 | then next default boot must show `PAS shutdown main (id=0x1): 0` |
+| `Firmware check failed` / `Failed to load firmware metadata` / `Failed to setup memory area` / `Failed to load firmware` + empty suffix | never reached INIT/AUTH of main | say which line |
 
 USB `/firmware/...` next to `qebspilaa64.efi` is **already MATCH**.
-Do not re-hash on the next boot. Remaining split: no `Starting`
-(Insyde/TPL; late EBS never fired) vs `Starting` + Failed init/auth
-for main.
+Do not re-hash. Do not rebuild qebspil for louder logs unless this
+photo is unreadable. **HOLD** `attach_running_main`.
+
+`ALWAYS_START` / missing `qcom,broken-reset` skip the **whole**
+rproc at enumerate — they do **not** start DTB and skip main.
+`firmware-name` is main `qcadsp8380.mbn` then DTB `adsp_dtbs.elf`
+(qebspil maps DTB to the last string). Both files MATCH. Carveouts
+already agree with the ELFs.
 
 ## After Linux is up (no install ask)
 
@@ -233,21 +243,25 @@ attaching to UEFI lite ADSP
 ```
 
 This boot did **not** print `PAS shutdown dtb (id=0x24): 0` — reuse
-skipped teardown. CDSP: dtb `0x25` **-22**; main `0x12` **0**. Use
-ConOut (§ above) to know if late EBS ran. `systab` still missing
-`DTB=` after EBS is secondary (UKI / post-EBS), not the AUTH gate.
+skipped teardown. CDSP: dtb `0x25` **-22**; main `0x12` **0**.
+`systab` still missing `DTB=` after EBS is secondary.
 
-### Omarchy A/B if the photo is impossible
+### No-reuse default boot (LANDED — do not repeat as the ask)
 
-Same dtbloader → ALWAYS_START qebspil → Limine, **one** boot
-**without** `reuse_authenticated_dtb=1`:
+Same staging, Limine **default** (no reuse):
 
-| dmesg | meaning |
-|-------|---------|
-| `PAS shutdown dtb (id=0x24): 0` | TZ had DTB state (INIT and/or AUTH) |
-| `PAS shutdown dtb (id=0x24): -22` | 0x24 never up — late EBS did not INIT DTB |
-| `PAS shutdown main (id=0x1): 0` | main was up |
-| `PAS shutdown main (id=0x1): -22` | main never up |
+```
+PAS shutdown dtb (id=0x24): 0
+PAS shutdown main (id=0x1): -22
+error -22 initializing …/adsp_dtbs.elf
+→ attach-to-lite
+```
+
+`0x24: 0` = late EBS ran; DTB left up (INIT and/or AUTH). Insyde
+TPL is **not** totally dead. `0x1: -22` = main never left up.
+NS `-22` on `adsp_dtbs.elf` is **expected** after tearing down
+UEFI 0x24. Audio still Dummy. The remaining ask is the ConOut
+**main** Failed line (§ above), not another PAS dump.
 
 If EBS AUTH of **main PAS 0x1** succeeded, first confirm the next
 **default** boot shows `PAS shutdown main (id=0x1): 0`. Only then A/B
@@ -270,3 +284,8 @@ qcom_q6v5_pas.attach_running_main=1
 - Not a TZ signature fix. Found-remoteproc + lite still has no
   audio until UEFI AUTH of full ADSP (main 0x1).
 - Not a missing `/firmware` path on this USB (MATCH closed).
+- Not “late EBS never fired / Insyde TPL dead” as primary
+  (no-reuse `0x24: 0` retired that).
+- Not a kernel that keeps UEFI 0x24 and NS-`AUTH_RESET`s main
+  only. REUSE_PARTIAL already kept 0x24; NS `PAS_INIT` of
+  `qcadsp8380.mbn` was -22. **HOLD** `attach_running_main`.
