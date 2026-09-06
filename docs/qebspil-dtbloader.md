@@ -9,9 +9,10 @@ That line is prepare only. USB `/firmware/...` next to qebspil
 **closed**. No-reuse default boot **landed**: `PAS shutdown dtb
 (id=0x24): 0` + `main (id=0x1): -22` + NS `-22` on `adsp_dtbs.elf`
 → attach-to-lite. Late EBS **ran**; Insyde TPL is **not** totally
-dead. Main never left up. The 72634c6 file+NV-efivar logger **missed
-`pil_finish` stages** (FAT/NV down at EBS; load-time path lines only).
-Next gate is the **ebs-efivar-ram** binary: copy
+dead. Main never left up. The 72634c6 file+NV logger **missed `pil_finish` stages** (931 B
+efivar == USB log; path lines only, repeated once). #14 volatile
+still grew the var at EBS. Next gate is **ebs-efivar-fixed** (4 KiB
+in-place NV): copy
 [qebspil/qebspilaa64.efi](../qebspil/qebspilaa64.efi) over the live
 ALWAYS_START efi. After boot, paste **efivar only** (`QebspilAdsp`,
 `dd … skip=4`). INIT-fail preferred — no DTB rollback. **HOLD**
@@ -197,11 +198,11 @@ TPL poke is **retired**: no-reuse `0x24: 0` means `pil_finish`
 ran. TPL can still be flaky; it is not the “0x24 up, 0x1 never”
 explanation.
 
-## Next: copy the ebs-efivar-ram EFI (efivar only)
+## Next: copy the ebs-efivar-fixed EFI (efivar only)
 
 ConOut photo is **retired**. Prebuilt
 [qebspil/qebspilaa64.efi](../qebspil/qebspilaa64.efi) (`ALWAYS_START=1`
-+ ebs-efivar-ram). Copy it over the live `qebspilaa64.efi` on the
++ ebs-efivar-fixed). Copy it over the live `qebspilaa64.efi` on the
 same volume as dtbloader + MATCH firmware. After boot, **efivar
 only** — no USB log, no photo. Recipe:
 [qebspil/README.md](../qebspil/README.md).
@@ -294,7 +295,7 @@ qcom_q6v5_pas.attach_running_main=1
 - Not another NS `PAS_INIT` kernel tweak. That does not publish the
   DTB table and does not AUTH 0x1. pkgrel stays 11.
 - Not a reason to fork Limine or patch qebspil TPL / Stall. The
-  ebs-efivar-ram patch in `qebspil/` is the justified
+  ebs-efivar-fixed patch in `qebspil/` is the justified
   edit (prebuilt `qebspilaa64.efi` ready to copy).
 - Not a TZ signature fix. Found-remoteproc + lite still has no
   audio until UEFI AUTH of full ADSP (main 0x1).

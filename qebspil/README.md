@@ -8,51 +8,46 @@ Pinned upstream: [stephan-gh/qebspil](https://github.com/stephan-gh/qebspil)
 `0001-main-fail-file-and-efivar-log.patch`.
 Built with `QEBSPIL_ALWAYS_START=1`.
 
-## Why the 72634c6 logger missed stages
+## Why 72634c6 (and #14 volatile) missed stages
 
-LIVE collect: efivar `QebspilAdsp` and USB `\qebspil-adsp.log` were
-**identical** — only load-time `Firmware … path=` lines for ADSP/CDSP
-DTB+MAIN. No `[MAIN] pas=0x1 stage=INIT|AUTH`. PAS still `0x24: 0` /
-`0x1: -22`, so late EBS **did** AUTH DTB; `pil_finish` ran.
+Omarchy collect: efivar `QebspilAdsp` **==** USB `\qebspil-adsp.log`
+(**931 B**). Banner `main-fail-log build (file+efivar)`. Only load-time
+`Firmware` path lines for ADSP/CDSP DTB+MAIN, **repeated once**
+(`efi_dtb_changed` twice). Paths/carveouts sane. No `stage=INIT|AUTH`.
+PAS still `0x24: 0` / `0x1: -22` — late EBS **did** AUTH DTB;
+`pil_finish` ran.
 
-The old persist used `NON_VOLATILE` `SetVariable` (SPI / FTW) then FAT
-`LibOpenRoot` + `Print`. Load-time writes succeeded. At late
-ExitBootServices, FAT is already down and Insyde refuses NV var writes.
-Stage lines stayed in RAM and died with EBS.
+72634c6 persist **grew** the NV var (931 B → stages). That realloc
+needs SPI/FTW, already down at EBS, then FAT + Print. #14 deleted NV
+and recreated a **volatile loglen-sized** var — after EBS volatile is
+read-only / may vanish, and a growing write still needs a new slot.
 
 ## What this binary does
 
-- Same ALWAYS_START path. Banner line: `qebspil: ebs-efivar-ram build`
+- Banner: `qebspil: ebs-efivar-fixed build` (not `main-fail-log`, not
+  `ebs-efivar-ram`)
 - `[MAIN]` / `[DTB]` + `pas=0x1` / `0x24` + `stage=INIT|AUTH|fw_check|…`
   + `status=0x…` from `pil_finish`
-- **Primary persist is efivar**, including at late EBS: RAM-backed
-  (volatile, no `NON_VOLATILE`) `SetVariable` of `QebspilAdsp`. No FAT
-  and no ConOut once `efi_late_ebs` starts
-- USB `\qebspil-adsp.log` is load-time only (best-effort). Do not rely
-  on it for INIT vs AUTH
+- **Keep `QebspilAdsp` NV|BS|RT** (same var Linux already showed)
+- At load, create a **fixed 4 KiB** slot. Every persist — including
+  late EBS — is an **in-place same-size** `SetVariable`. No FTW
+  realloc, no FAT, no ConOut at EBS
+- `QebspilEbs` is a fixed 256 B last-line slot (same idea)
 
 ## EFI variables (GUID `6b7c0a11-24e1-4a01-9e80-11ad50010024`)
 
-| name | when | contents |
+| name | size | contents |
 |------|------|----------|
-| `QebspilAdsp` | every persist; **EBS primary** | full log (volatile RAM) |
-| `QebspilEbs` | every persist | last line only (compact fallback) |
-| `QebspilPtr` | load-time NV | `rt=0x… cap=4096 used=…` (runtime buffer phys) |
-
-Readback after Linux is up (4-byte EFI attribute prefix):
+| `QebspilAdsp` | 4096 B NV | full log, NUL-padded (EBS **primary**) |
+| `QebspilEbs` | 256 B NV | last stage line, NUL-padded |
 
 ```
-# primary — expect ebs-efivar-ram + late-EBS enter + [MAIN] stage=
+# skip 4-byte EFI attribute prefix; expect ebs-efivar-fixed + stage=
 dd if=/sys/firmware/efi/efivars/QebspilAdsp-6b7c0a11-24e1-4a01-9e80-11ad50010024 \
    bs=1 skip=4 status=none; echo
-
-# last stage only, if the full var is truncated
-dd if=/sys/firmware/efi/efivars/QebspilEbs-6b7c0a11-24e1-4a01-9e80-11ad50010024 \
-   bs=1 skip=4 status=none; echo
 ```
 
-LIVE no-reuse (`0x24: 0`, `0x1: -22`) prefers **MAIN INIT** fail.
-Look for:
+LIVE no-reuse (`0x24: 0`, `0x1: -22`) prefers **MAIN INIT** fail:
 
 ```
 qebspil: qcom,x1e80100-adsp-pas [MAIN] pas=0x1 stage=INIT status=0x…
@@ -62,21 +57,13 @@ vs `stage=AUTH`. AUTH-fail of MAIN would have dropped DTB.
 
 ## Next Omarchy step (the binary)
 
-Copy this file over the live ALWAYS_START `qebspilaa64.efi` on the
-**same USB/ESP** that already has dtbloader + MATCH firmware.
-Do not rebuild the kernel. Do not enable `attach_running_main`.
+Replace USB `qebspilaa64.efi` only (same stick as dtbloader + MATCH
+firmware). Do not rebuild the kernel. Do not enable
+`attach_running_main`. After next boot: **efivar only** (the `dd`
+above). No ConOut, no photo, no USB log.
 
 ```
-# USB/ESP that already holds dtbloader + qebspil + /firmware/...
 cp qebspil/qebspilaa64.efi /path/to/that/volume/qebspilaa64.efi
 ```
 
-After that file is on the stick, the next time the machine is up
-(no ConOut, no photo): paste **efivar only** (`QebspilAdsp` `dd`
-above). Skip `cat /qebspil-adsp.log`.
-
-Rebuild from source (optional; prebuilt already in this dir):
-
-```
-./qebspil/build-main-fail-log.sh
-```
+Rebuild (optional): `./qebspil/build-main-fail-log.sh`
