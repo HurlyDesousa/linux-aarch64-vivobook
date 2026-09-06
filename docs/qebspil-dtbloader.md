@@ -4,8 +4,11 @@ pkgrel **11** held. This is **UEFI staging**, not a kernel rebuild.
 Do **not** commit Qualcomm/ASUS firmware blobs.
 
 dtbloader → ALWAYS_START is **done** (`Found remoteproc` adsp+cdsp).
-That line is prepare only. The remaining gate is late-EBS AUTH
-(`Starting remoteproc` at Limine→UKI). **HOLD** `attach_running_main`.
+That line is prepare only. USB `/firmware/...` next to qebspil
+**MATCH**es `/lib/firmware` — missing/wrong-path firmware is
+**closed**. Remaining branches: late EBS never fired (Insyde/TPL)
+vs late EBS Failed init/auth for main. Still need ConOut lines or
+a no-reuse PAS dump. **HOLD** `attach_running_main`.
 
 ## Why this recipe exists
 
@@ -91,9 +94,12 @@ volume. S5507QA X Elite entry wants
 `/boot/dtbs/...` (this package) — not a firmware blob.
 
 qebspil reads `/firmware/...` from the **same volume** as
-`qebspilaa64.efi`. Those two files must match
-`/lib/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/` (already verified
-MATCH on pkgrel 11). Do not paste hashes or blobs into git.
+`qebspilaa64.efi`. Omarchy closed this for the live USB: that
+volume has `qebspilaa64.efi` + dtbloader +
+`/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/{adsp_dtbs.elf,qcadsp8380.mbn}`
+and hashes **MATCH** the prior MATCH vs
+`/lib/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/`. Do not paste
+hashes or blobs into git. Recheck only if the stick is recopied.
 
 `bcfg driver add` (dtbloader first, then qebspil) is the persistent
 form. EFI Shell `load` is the ConOut test.
@@ -195,12 +201,10 @@ One photo (or burst) through Limine pick → UKI. Read these lines:
 | `Failed to authenticate and start firmware for …` | `AUTH_RESET` failed (DTB vs main by suffix) |
 | `Starting` and no Failed-* for ADSP | claims AUTH of 0x24 **and** 0x1 |
 
-Also confirm the **same volume** as `qebspilaa64.efi` has:
-
-```
-/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/adsp_dtbs.elf
-/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/qcadsp8380.mbn
-```
+USB `/firmware/...` next to `qebspilaa64.efi` is **already MATCH**.
+Do not re-hash on the next boot. Remaining split: no `Starting`
+(Insyde/TPL; late EBS never fired) vs `Starting` + Failed init/auth
+for main.
 
 ## After Linux is up (no install ask)
 
@@ -265,3 +269,4 @@ qcom_q6v5_pas.attach_running_main=1
 - Not a reason to fork Limine or patch qebspil (TPL / Stall) here.
 - Not a TZ signature fix. Found-remoteproc + lite still has no
   audio until UEFI AUTH of full ADSP (main 0x1).
+- Not a missing `/firmware` path on this USB (MATCH closed).
