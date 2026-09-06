@@ -234,20 +234,20 @@ NS `PAS_INIT` tweak as a table fix.
 
 **7.2.2-11 dtbloader VERIFY** (pkgrel 11 held): after dtbloader →
 ALWAYS_START qebspil → Limine, ConOut **`Found remoteproc` OK**
-(adsp+cdsp). That is enumerate+prepare only — **not AUTH**. Late-EBS
-ConOut **not captured** (load-time Found only). Omarchy reuse=1
-dmesg: `reusing UEFI/qebspil DTB PAS (id=0x24); skip teardown + NS
-… adsp_dtbs.elf PAS_INIT`; `PAS shutdown main (id=0x1): -22`;
-error initializing `qcadsp8380.mbn`; attach-to-lite. **No**
-`PAS shutdown dtb (id=0x24): 0` on this boot — reuse skipped
-teardown. CDSP: dtb `0x25` -22; main `0x12` 0. Dummy / no cards.
-`systab` still no `DTB=` (post-EBS; secondary). USB firmware path
-**CLOSED**: same volume as `qebspilaa64.efi` + dtbloader has
-`/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/{adsp_dtbs.elf,qcadsp8380.mbn}`;
-hashes MATCH `/lib/firmware`. Remaining: late EBS never fired
-(Insyde/TPL) vs late EBS Failed init/auth for main. **HOLD**
-`attach_running_main`. Next: one Limine→UKI ConOut photo (or one
-no-reuse boot to read `PAS shutdown dtb 0x24` vs main 0x1).
+(adsp+cdsp). That is enumerate+prepare only — **not AUTH**. USB
+firmware path **CLOSED** (same volume + hashes MATCH).
+
+**7.2.2-11 no-reuse VERIFY** (pkgrel 11 held): same staging, Limine
+**default** (no reuse): `PAS shutdown dtb (id=0x24): 0`; `main
+(id=0x1): -22`; `error -22 initializing …/adsp_dtbs.elf` →
+attach-to-lite; Dummy. Late EBS **ran**; DTB left up; main never
+left up. Insyde TPL is **not** totally dead. NS `-22` on the DTB
+ELF is expected after tearing down UEFI 0x24. Preferred: main
+`scm_pil_init` failed (no DTB rollback); AUTH-fail of main would
+have dropped 0x24. **HOLD** `attach_running_main`. Next: one
+Limine→UKI ConOut photo of the **main** Failed line (`Failed to
+init firmware for qcom,x1e80100-adsp-pas:` vs `Failed to
+authenticate and start firmware …`, empty suffix).
 
 See [docs/adsp-22.md](docs/adsp-22.md) and the operator recipe
 [docs/qebspil-dtbloader.md](docs/qebspil-dtbloader.md)
@@ -269,10 +269,11 @@ aplay -l
 ```
 
 Daily boot: no extra flags (attach-to-lite). dtbloader then
-ALWAYS_START qebspil is already staged (`Found remoteproc` OK).
-Next is a Limine→UKI ConOut photo of `Starting` / INIT / AUTH —
-not `attach_running_main`. After EBS AUTH of 0x1 only: Limine
-cmdline `qcom_q6v5_pas.attach_running_main=1`.
+ALWAYS_START qebspil is already staged. No-reuse dump: `0x24: 0`,
+`0x1: -22`. Next is a Limine→UKI ConOut photo of the **main**
+Failed line (INIT vs AUTH) — not `attach_running_main`. After EBS
+AUTH of 0x1 only: Limine cmdline
+`qcom_q6v5_pas.attach_running_main=1`.
 
 ## Build and install (on the Vivobook)
 
