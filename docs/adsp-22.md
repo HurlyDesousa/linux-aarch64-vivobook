@@ -409,8 +409,12 @@ qebspil only enumerates after the bootloader installs `EfiDtbTableGuid`.
    after reused DTB. **Discarded as primary.** We never reached main
    AUTH_RESET; NS `PAS_INIT` 0x1 failed first. Do not ship another
    0005 sequence tweak hoping NS accepts the MBN.
-3. Blob mismatch ESP `/firmware` vs `/lib/firmware`. **Still open on
-   the laptop** (no EBS log). Must hash-check; do not assume.
+3. Blob mismatch ESP `/firmware` vs `/lib/firmware`. **Closed for
+   this USB staging** (Omarchy): same volume as `qebspilaa64.efi` +
+   dtbloader has `/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/
+   {adsp_dtbs.elf,qcadsp8380.mbn}`; hashes **MATCH** the prior
+   MATCH vs `/lib/firmware`. Missing/wrong-path firmware is ruled
+   out. Recheck only if the stick is recopied.
 4. Something else unique in 7.2 `qcom_q6v5_pas` / SCM. **Not primary.**
    CDSP main 0x12 NS path works on the same kernel.
 
@@ -638,23 +642,37 @@ can still never fire. **No `Starting remoteproc` on ConOut** after
 a confirmed Found-adsp+cdsp load: flag this hack first. Do not
 assume AUTH ran silently.
 
-Firmware must sit on the **same FAT as `qebspilaa64.efi`**:
+### Firmware path CLOSED (this USB staging)
+
+Omarchy confirmed the **same USB volume** holds:
 
 ```
+/qebspilaa64.efi
+/dtbloader.efi          # or dtbloaderaa64.efi
 /firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/adsp_dtbs.elf
 /firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/qcadsp8380.mbn
 ```
 
-`fw_prepare` prefixes `firmware\` onto the DT `firmware-name`.
-Found-remoteproc without `Failed to enumerate` / `Failed to
-prepare` means those files opened at `load` time. Late
-`wrong firmware?` is then TZ/INIT, not a missing path.
+Hashes **MATCH** the prior MATCH vs `/lib/firmware/...`. Missing or
+wrong-path firmware is **ruled out** for this stick. `fw_prepare`
+prefixes `firmware\` onto the DT `firmware-name`. Found-remoteproc
+without `Failed to enumerate` / `Failed to prepare` already meant
+those files opened at `load` time. A later ConOut `wrong firmware?`
+is TZ/INIT, not a missing path. Do not re-hash unless the stick is
+recopied. Do not paste hashes or blobs into git.
+
+**Remaining branches** (need ConOut lines **or** a no-reuse PAS
+dump — nothing else):
+
+1. Late EBS **never fired** (Insyde + qebspil TPL poke)
+2. Late EBS ran and **Failed init/auth for main** (empty suffix)
 
 ## Next on-device experiments (Omarchy / Toby)
 
-dtbloader + ALWAYS_START + Found-remoteproc is **done**. The gate
-is late-EBS AUTH of **main PAS 0x1**. pkgrel 11 held. No rebuild
-ask. Do not commit blobs. Operator ConOut recipe:
+dtbloader + ALWAYS_START + Found-remoteproc is **done**. USB
+`/firmware/...` next to qebspil is **MATCH** (path closed). The
+gate is late-EBS AUTH of **main PAS 0x1**. pkgrel 11 held. No
+rebuild ask. Do not commit blobs. Operator ConOut recipe:
 [qebspil-dtbloader.md](qebspil-dtbloader.md).
 
 ### 1. One ConOut photo through Limine → UKI (preferred)
@@ -667,18 +685,14 @@ handoff. Need at least one of:
 |--------|---------|------|
 | **no** `Starting remoteproc` (after Found adsp+cdsp) | late EBS never ran — Insyde TPL hack suspect; or the photo missed the flash | same photo again if it scrolled; else treat TPL as the lead |
 | `Unexpected IEvent structure (not edk2)?` | TPL poke rejected / unsafe on Insyde | late EBS likely broken; do not enable attach-main |
-| `Starting remoteproc: qcom,x1e80100-adsp-pas` then `Failed to init firmware for … DTB` `(wrong firmware?)` | DTB `scm_pil_init` failed; nothing rolled back | confirm `/firmware/...` next to `qebspilaa64.efi` matches Linux |
-| `Starting` then `Failed to init firmware for qcom,x1e80100-adsp-pas:` (empty suffix, no ` DTB`) | DTB INIT done; main INIT failed; **DTB left up** | firmware / TZ for `qcadsp8380.mbn`; still no attach-main |
+| `Starting remoteproc: qcom,x1e80100-adsp-pas` then `Failed to init firmware for … DTB` `(wrong firmware?)` | DTB `scm_pil_init` failed; nothing rolled back | TZ/INIT of DTB (USB path already MATCH); still no attach-main |
+| `Starting` then `Failed to init firmware for qcom,x1e80100-adsp-pas:` (empty suffix, no ` DTB`) | DTB INIT done; main INIT failed; **DTB left up** | TZ/INIT of main (USB path already MATCH); still no attach-main |
 | `Failed to authenticate and start firmware for … DTB` | DTB `AUTH_RESET` failed | not Linux NS `PAS_INIT` |
 | `Failed to authenticate and start firmware for qcom,x1e80100-adsp-pas:` (no ` DTB`) | main AUTH failed; qebspil rolls back DTB | 0x1 never left running |
 | `Starting` and **no** Failed-init / Failed-authenticate for ADSP | late EBS claims AUTH of DTB **and** main | then §3 (still no attach-main on that first boot) |
 
-Also confirm on the USB/ESP that holds `qebspilaa64.efi`:
-
-```
-/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/adsp_dtbs.elf
-/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/qcadsp8380.mbn
-```
+USB `/firmware/...` next to `qebspilaa64.efi` is **already MATCH**.
+Do not spend the next boot re-hashing.
 
 ### 2. Optional A/B: one boot **without** reuse (same UEFI staging)
 

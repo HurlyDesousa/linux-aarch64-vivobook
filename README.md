@@ -241,10 +241,11 @@ dmesg: `reusing UEFI/qebspil DTB PAS (id=0x24); skip teardown + NS
 error initializing `qcadsp8380.mbn`; attach-to-lite. **No**
 `PAS shutdown dtb (id=0x24): 0` on this boot — reuse skipped
 teardown. CDSP: dtb `0x25` -22; main `0x12` 0. Dummy / no cards.
-`systab` still no `DTB=` (post-EBS; secondary). Insyde + qebspil
-`event.c` TPL poke is suspect if there is no `Starting`. Firmware
-must sit on the same FAT as `qebspilaa64.efi` under
-`/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/`. **HOLD**
+`systab` still no `DTB=` (post-EBS; secondary). USB firmware path
+**CLOSED**: same volume as `qebspilaa64.efi` + dtbloader has
+`/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/{adsp_dtbs.elf,qcadsp8380.mbn}`;
+hashes MATCH `/lib/firmware`. Remaining: late EBS never fired
+(Insyde/TPL) vs late EBS Failed init/auth for main. **HOLD**
 `attach_running_main`. Next: one Limine→UKI ConOut photo (or one
 no-reuse boot to read `PAS shutdown dtb 0x24` vs main 0x1).
 
