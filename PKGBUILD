@@ -10,7 +10,7 @@ _alarmrel=2
 _srcname=linux-7.2
 _desc="AArch64 Vivobook S15 (x1e80100)"
 pkgver=${_alarmver}
-pkgrel=9
+pkgrel=10
 arch=('aarch64')
 url="https://github.com/HurlyDesousa/linux-aarch64-vivobook"
 license=('GPL-2.0-only')
@@ -30,7 +30,8 @@ source=("https://www.kernel.org/pub/linux/kernel/v7.x/${_srcname}.tar.xz"
         "0001-x1e-adsp-dtb-init-after-power.patch"
         "0002-qcom-battmgr-capacity-from-energy.patch"
         "0003-x1e80100-vivobook-camera-phase-a.patch"
-        "0004-i2c-qcom-cci-power-on-gdsc-before-hw-init.patch")
+        "0004-i2c-qcom-cci-power-on-gdsc-before-hw-init.patch"
+        "0005-x1e-adsp-reuse-authenticated-dtb.patch")
 # md5 of the files this PKGBUILD actually downloads (kernel.org + GitHub raw).
 # Do not copy ALARM's md5sums array: theirs is aligned to extra chromebook
 # sources and does not match these URLs.
@@ -47,7 +48,8 @@ md5sums=('381ae4b20294dcf4b8f63f1fd1bb7017'  # linux-7.2.tar.xz
          'SKIP'                             # 0001 x1e adsp
          'SKIP'                             # 0002 battmgr capacity
          'SKIP'                             # 0003 camera phase-a
-         'SKIP')                            # 0004 CCI GDSC pm_runtime fix
+         'SKIP'                             # 0004 CCI GDSC pm_runtime fix
+         'SKIP')                            # 0005 reuse UEFI/qebspil ADSP DTB
 
 prepare() {
   cd $_srcname
@@ -69,6 +71,7 @@ prepare() {
   patch -p1 --forward --batch < "${srcdir}/0002-qcom-battmgr-capacity-from-energy.patch"
   patch -p1 --forward --batch < "${srcdir}/0003-x1e80100-vivobook-camera-phase-a.patch"
   patch -p1 --forward --batch < "${srcdir}/0004-i2c-qcom-cci-power-on-gdsc-before-hw-init.patch"
+  patch -p1 --forward --batch < "${srcdir}/0005-x1e-adsp-reuse-authenticated-dtb.patch"
 
   cat "${srcdir}/config" > ./.config
   ./scripts/kconfig/merge_config.sh -m .config "${srcdir}/config.vivobook"
