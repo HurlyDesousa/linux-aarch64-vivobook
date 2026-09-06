@@ -558,13 +558,25 @@ qebspil: Found remoteproc: qcom,x1e80100-adsp-pas
 qebspil: Found remoteproc: qcom,x1e80100-cdsp-pas
 ```
 
-Linux after that same boot:
+Linux after that same boot (Omarchy confirmed, reuse=1). Late-EBS
+ConOut was **not** captured — only the load-time Found remoteproc
+lines above.
 
-- reuse line + `PAS shutdown main (id=0x1): -22` → attach-to-lite →
-  Dummy / no cards
-- `/sys/firmware/efi/systab` still **no `DTB=`** (post-EBS; secondary)
-- Late-EBS ConOut (`Starting remoteproc` / INIT / AUTH at Limine→UKI
-  handoff) **not captured yet**
+```
+reusing UEFI/qebspil DTB PAS (id=0x24); skip teardown + NS … adsp_dtbs.elf PAS_INIT
+PAS shutdown main (id=0x1): -22
+error initializing firmware …/qcadsp8380.mbn
+attaching to UEFI lite ADSP
+```
+
+This boot did **not** print `PAS shutdown dtb (id=0x24): 0` because
+reuse **skipped** that teardown. Do not read a missing 0x24 shutdown
+line as “DTB was AUTH’d.”
+
+CDSP on the same boot: dtb `0x25` shutdown **-22**; main `0x12`
+shutdown **0** (NS CDSP still comes up). Dummy / no cards.
+
+`/sys/firmware/efi/systab` still **no `DTB=`** (post-EBS; secondary).
 
 **`Found remoteproc` is not AUTH.** In `stephan-gh/qebspil` that
 `Print` lives in `src/dtb.c` `dtb_enumerate_rprocs()`: find the
