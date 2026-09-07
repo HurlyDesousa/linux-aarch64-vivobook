@@ -37,6 +37,7 @@ source=("https://www.kernel.org/pub/linux/kernel/v7.x/${_srcname}.tar.xz"
 # md5 of the files this PKGBUILD actually downloads (kernel.org + GitHub raw).
 # Do not copy ALARM's md5sums array: theirs is aligned to extra chromebook
 # sources and does not match these URLs.
+# ALARM tip config can drift; md5 must match the fetched ${_alarm}/config file.
 md5sums=('381ae4b20294dcf4b8f63f1fd1bb7017'  # linux-7.2.tar.xz
          '4ed13fbca5aa1335e460f019010fb966'  # patch-7.2.2.xz
          '328ab847d1a56a5cabbb4779d931a175'  # 0001
@@ -44,7 +45,7 @@ md5sums=('381ae4b20294dcf4b8f63f1fd1bb7017'  # linux-7.2.tar.xz
          '86dc20adc64478c726a7a9f8fcf56337'  # 0003
          'a9bcf91cab44e1193240a43189a9313f'  # 0004
          '24c403d3738a418a67b8c0e7659380aa'  # 0005
-         '571de3681ddc773bb85e323b92e407da'  # config
+         'df7a3c878ccdb5b23503839a2bca14e7'  # config
          'f82b1a5732c416762bbc88e00b1a4b15'  # linux.preset
          'SKIP'                             # config.vivobook
          'SKIP'                             # 0001 x1e adsp
