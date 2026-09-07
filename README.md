@@ -295,9 +295,10 @@ Stock 7.2 already has SoundWire + WSA/TX/RX macros + remoteproc under
 `soc`; the board DTB was missing `/sound`, so ALSA had nothing to bind
 even after ADSP. Yoga Slim 7x DTS is reference only.
 
-AudioReach topology (`X1E80100-ASUS-Vivobook-S15`,
-[audioreach-topology#22](https://github.com/linux-msm/audioreach-topology/pull/22))
-and UCM are still required. PAS `0x24`/`0x1` `-22` is **parallel**, not
+AudioReach topology aliases T14s → `X1E80100-ASUS-Vivobook-S15` at
+`qcom/x1e80100/ASUSTeK/vivobook-s15`
+([audioreach-topology#22](https://github.com/linux-msm/audioreach-topology/pull/22)).
+UCM is still required. PAS `0x24`/`0x1` `-22` is **parallel**, not
 a blocker for this graph. `CONFIG_RESET_GPIO=y` is already on (Yoga WSA
 reset lesson). **HOLD install / no Omarchy reboot for this PR.**
 

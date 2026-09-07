@@ -1,11 +1,19 @@
 # Vivobook `/sound` graph (pkgrel 12)
 
-Omarchy NVMe found SoundWire + WSA/TX/RX macros + remoteproc under
-`soc`, and **no top-level `/sound`**. That matches stock 7.2
-`x1-asus-vivobook-s15.dtsi`. `0007-x1e80100-vivobook-sound-dts.patch`
-ports Elliot Huang’s tested board graph (LKML Jun 2025, “arm64: dts:
-qcom: support sound on Asus Vivobook S15”) so ALSA can eventually
-bind. Yoga Slim 7x DTS is **reference only** (4× WSA, no WCD).
+Omarchy live DT (`/sys/firmware/devicetree/base`) confirmed SoundWire
++ WSA/TX/RX macros + remoteproc under `soc`, and **no top-level
+`/sound`**. That matches stock 7.2 `x1-asus-vivobook-s15.dtsi`.
+`0007-x1e80100-vivobook-sound-dts.patch` ports Elliot Huang’s tested
+board graph (LKML Jun 2025, “arm64: dts: qcom: support sound on Asus
+Vivobook S15”) so ALSA can eventually bind. Yoga Slim 7x DTS is
+**reference only** (4× WSA, no WCD).
+
+Live `soundwire@6ab0000` is `label = "WSA2"`, `status = "disabled"`.
+In 7.2 `hamoa.dtsi` that node is **`swr3`** (WSA2 / Yoga’s second
+bank), not `swr0`. `0007` enables **`&swr0`** (`soundwire@6b10000`,
+`label = "WSA"`) plus WSA8845 children, matching Elliot / T14s
+(2 speakers). Do not turn on WSA2 unless a later dump shows four
+amps.
 
 `CONFIG_RESET_GPIO=y` is already in `config.vivobook` (Yoga lesson:
 WSA amp reset/unmute is a GPIO reset, not `POWER_RESET_GPIO`).
@@ -14,7 +22,10 @@ WSA amp reset/unmute is a GPIO reset, not `POWER_RESET_GPIO`).
 
 - **AudioReach topology** matching `model = "X1E80100-ASUS-Vivobook-S15"`:
   [linux-msm/audioreach-topology#22](https://github.com/linux-msm/audioreach-topology/pull/22)
-  (`X1E80100-ASUS-Vivobook-S15` / T14s-shaped 2× WSA + 2× DMIC + jack).
+  aliases the T14s graph —
+  `X1E80100-LENOVO-Thinkpad-T14s` → `X1E80100-ASUS-Vivobook-S15` →
+  install dir `qcom/x1e80100/ASUSTeK/vivobook-s15`. Userspace still
+  has to ship that `.bin`.
 - **UCM**: alsa-ucm-conf maps `ASUSTeK COMPUTER.*ASUS Vivobook S 15`
   onto the T14s Qualcomm x1e80100 profile
   ([alsa-ucm-conf#570](https://github.com/alsa-project/alsa-ucm-conf/pull/570)
@@ -40,16 +51,21 @@ After a later install (not this PR), dump and keep:
 ls /proc/device-tree/sound
 cat /proc/device-tree/sound/compatible
 cat /proc/device-tree/sound/model
-ls /proc/device-tree/soc/soundwire@6b10000   # swr0 WSA
-ls /proc/device-tree/soc/soundwire@6ad0000   # swr1 WCD RX
-ls /proc/device-tree/soc/soundwire@6d30000   # swr2 WCD TX
+# Confirm 7.2 symbols (do not trust address→swr0 guesses)
+xxd -p /proc/device-tree/__symbols__/swr0   # expect …/soundwire@6b10000
+xxd -p /proc/device-tree/__symbols__/swr1   # 6ad0000 WCD RX
+xxd -p /proc/device-tree/__symbols__/swr2   # 6d30000 WCD TX
+xxd -p /proc/device-tree/__symbols__/swr3   # 6ab0000 WSA2, stay disabled
+for a in 6b10000 6ad0000 6d30000 6ab0000; do
+  echo "== $a =="; cat /proc/device-tree/soc/soundwire@$a/label /proc/device-tree/soc/soundwire@$a/status
+  ls /proc/device-tree/soc/soundwire@$a
+done
 ls /proc/device-tree/audio-codec             # wcd938x
-# Firmware vs Linux (iteration): any extra / missing vs this patch
 find /proc/device-tree -name 'sound*' -o -name '*wsa*' -o -name '*wcd*' | sort
 dmesg | grep -E 'snd|soundwire|wsa|wcd|q6apm|remoteproc|PAS'
 aplay -l
 # Topology / UCM (userspace, not this kernel)
-ls /usr/share/alsa/topology /usr/lib/firmware/qcom/*tplg* 2>/dev/null
+ls /usr/lib/firmware/qcom/x1e80100/ASUSTeK/vivobook-s15/*tplg* 2>/dev/null
 ls /usr/share/alsa/ucm2/Qualcomm/x1e80100/
 ```
 
