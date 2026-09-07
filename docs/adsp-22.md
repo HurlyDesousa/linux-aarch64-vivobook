@@ -730,21 +730,14 @@ are **done**. USB `/firmware` MATCH is **closed**. pkgrel 11 held.
 **HOLD** `attach_running_main`. No kernel install. ConOut photo is
 **retired**. Omarchy 931 B collect: `QebspilAdsp` == USB log,
 `main-fail-log` banner, Firmware paths only (repeated once).
-acca195 ebs-efivar-fixed: banner OK, no `late-EBS enter` — that
-boot skipped dtbloader (keymap-only); upstream never registered
-`efi_late_ebs` without `EfiDtbTableGuid` / remotes. `0x24: -22`
-on that boot is **invalid for AUTH**. The INIT vs AUTH gate is
-**ebs-always-register** `qebspilaa64.efi` in [qebspil/](../qebspil/).
-
-### Primary: copy the prebuilt EFI onto the live stick
-
-```
-cp qebspil/qebspilaa64.efi /path/to/that/volume/qebspilaa64.efi
-```
-
-Same USB/ESP that already has dtbloader + MATCH firmware. After
-next **full dtbloader→qebspil** boot (no photo, no ConOut): paste
-**efivar only**.
+acca195 ebs-efivar-fixed **verbatim**: banner + Firmware DTB/MAIN
+for adsp+cdsp (repeated once). Remotes **were** prepared. No
+`late-EBS enter` / no stage=. Linux `0x24: -22` and `0x1: -22` —
+prepare ≠ AUTH. **Not** skipped-dtbloader / zero-remote. Prefer:
+callback never registered, never fired, or SetVariable at EBS
+failed despite 4 KiB. Tip efi is **ebs-register-status**
+`qebspilaa64.efi` in [qebspil/](../qebspil/).
+**Parked — stage only when Chief unparks.**
 
 ```
 # GUID 6b7c0a11-24e1-4a01-9e80-11ad50010024 — skip 4-byte attr prefix
@@ -752,12 +745,10 @@ dd if=/sys/firmware/efi/efivars/QebspilAdsp-6b7c0a11-24e1-4a01-9e80-11ad50010024
    bs=1 skip=4 status=none; echo
 ```
 
-Look for `ebs-always-register build`, `late-EBS registered
-status=`, then `late-EBS enter remotecount=N`. MAIN INIT vs AUTH
-only when remotecount>0 (needs dtbloader→qebspil). Do **not**
-`cat /qebspil-adsp.log` (FAT is down at EBS; that file is
-load-time only). Keymap-only unlock without dtbloader is invalid
-for 0x24 AUTH.
+Look for `ebs-register-status build`, `late-EBS registered
+status=`, `late-EBS armed remotecount=`, then `late-EBS enter`
+and `late-EBS persist SetVariable status=`. Do **not**
+`cat /qebspil-adsp.log` (FAT is down at EBS).
 
 | log (`[MAIN] pas=0x1 stage=…`) | meaning | vs LIVE |
 |----------|---------|---------|
@@ -796,8 +787,9 @@ later audio/GLINK problem, not another PAS_INIT of the OEM MBN.
   NS `PAS_INIT` the OEM main MBN.
 - Do **not** enable `attach_running_main=1` yet (0x1 shutdown is
   still -22; 0x1 has never AUTH'd on this board).
-- Do **not** treat “late EBS never fired / Insyde TPL dead” as
-  primary. `0x24: 0` on the no-reuse dump retired that.
+- No-reuse `0x24: 0` retired “TPL totally dead” for **that** boot.
+  acca195 prepare-OK + `0x24: -22` re-opens never-registered /
+  never-fired / EBS SetVariable fail for the missing enter.
 - Do **not** treat Found-remoteproc, attach-to-lite, or
   REUSE_PARTIAL as a TZ signature fix or as AUTH of 0x1.
 - Do **not** add Vivobook sound-card / WSA DTS as the next PAS -22
@@ -805,7 +797,8 @@ later audio/GLINK problem, not another PAS_INIT of the OEM MBN.
 - Do **not** claim another NS `PAS_INIT` kernel tweak publishes
   `EfiDtbTableGuid` or AUTHs 0x1. Do **not** bump pkgrel.
 - Do **not** fork Limine or patch qebspil TPL / Stall. The
-  ebs-always-register patch in `qebspil/` is the justified edit.
+  ebs-register-status patch in `qebspil/` is the justified edit.
+  **Parked — stage only when Chief unparks.**
 - A full remoteproc-core `RPROC_DETACHED` / Gerhold
   `wip/x1e80100-6.16-el2` backport is the upstream-shaped late-attach;
   pkgrel 11 is the 7.2-sized landing pad for the same moment (main
