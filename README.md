@@ -275,7 +275,8 @@ Patches live at repo root as
 `0001-x1e-adsp-dtb-init-after-power.patch`,
 `0002-qcom-battmgr-capacity-from-energy.patch`,
 `0005-x1e-adsp-reuse-authenticated-dtb.patch`, and
-`0006-x1e-adsp-attach-running-main.patch` (makepkg `source=()`
+`0006-x1e-adsp-attach-running-main.patch`, and
+`0007-x1e80100-vivobook-sound-dts.patch` (makepkg `source=()`
 basenames; copies under `patches/` are optional).
 
 Daily boot: no extra flags (attach-to-lite). dtbloader then
@@ -285,6 +286,22 @@ ALWAYS_START qebspil is already staged. No-reuse dump: `0x24: 0`,
 (`ebs-register-status`). **Parked — stage only when Chief unparks.**
 After EBS AUTH of 0x1 only: Limine cmdline
 `qcom_q6v5_pas.attach_running_main=1`.
+
+## Sound DTS — top-level `/sound` (pkgrel 12)
+
+**7.2.2-12** adds Elliot Huang’s Vivobook sound graph to
+`x1-asus-vivobook-s15.dtsi` (`0007-x1e80100-vivobook-sound-dts.patch`).
+Stock 7.2 already has SoundWire + WSA/TX/RX macros + remoteproc under
+`soc`; the board DTB was missing `/sound`, so ALSA had nothing to bind
+even after ADSP. Yoga Slim 7x DTS is reference only.
+
+AudioReach topology (`X1E80100-ASUS-Vivobook-S15`,
+[audioreach-topology#22](https://github.com/linux-msm/audioreach-topology/pull/22))
+and UCM are still required. PAS `0x24`/`0x1` `-22` is **parallel**, not
+a blocker for this graph. `CONFIG_RESET_GPIO=y` is already on (Yoga WSA
+reset lesson). **HOLD install / no Omarchy reboot for this PR.**
+
+See [docs/sound-dts.md](docs/sound-dts.md).
 
 ## Build and install (on the Vivobook)
 

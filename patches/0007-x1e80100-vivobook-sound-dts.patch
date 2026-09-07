@@ -1,0 +1,283 @@
+From: Grokbot <grokbot@s-w.art>
+Subject: arm64: dts: qcom: x1-asus-vivobook-s15: add top-level /sound graph
+
+Port Elliot Huang's tested Vivobook S15 sound DTS (LKML Jun 2025,
+"arm64: dts: qcom: support sound on Asus Vivobook S15") onto the 7.2
+board dtsi. v7.2 already has SoundWire + WSA/TX/RX/VA macros +
+remoteproc under soc (hamoa.dtsi); the board file is missing the
+top-level /sound card and the swr/WCD/WSA children ALSA binds.
+
+Adds, matching Elliot's patch (Yoga Slim 7x sound section is
+reference only — that board is 4x WSA, no WCD):
+  * /wcd938x (WCD9385, reset TLMM gpio191)
+  * /sound qcom,x1e80100-sndcard model X1E80100-ASUS-Vivobook-S15
+    VA / WCD capture / WCD playback / WSA dai-links
+  * vreg_l1b_1p8 (VA micbias) and vreg_l12b_1p2 (WSA VDD_IO)
+  * &lpass_tlmm speaker SD_N, &lpass_vamacro DMICs
+  * &swr0 WSA8845 left/right, &swr1 WCD RX, &swr2 WCD TX
+  * &tlmm wcd_default
+
+This is not a PAS -22 / TZ AUTH fix. AudioReach topology
+(linux-msm/audioreach-topology PR #22, X1E80100-ASUS-Vivobook-S15)
+and UCM are still required after the graph is in the DTB. Full ADSP
+(PAS 0x24 then 0x1) remains a parallel track.
+
+Signed-off-by: Grokbot <grokbot@s-w.art>
+---
+ arch/arm64/boot/dts/qcom/x1-asus-vivobook-s15.dtsi | 202 +++++++++++++++++++++
+ 1 file changed, 202 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/x1-asus-vivobook-s15.dtsi b/arch/arm64/boot/dts/qcom/x1-asus-vivobook-s15.dtsi
+--- a/arch/arm64/boot/dts/qcom/x1-asus-vivobook-s15.dtsi
++++ b/arch/arm64/boot/dts/qcom/x1-asus-vivobook-s15.dtsi
+@@ -18,6 +18,32 @@
+ 		serial1 = &uart14;
+ 	};
+ 
++	wcd938x: audio-codec {
++		compatible = "qcom,wcd9385-codec";
++
++		pinctrl-0 = <&wcd_default>;
++		pinctrl-names = "default";
++
++		qcom,micbias1-microvolt = <1800000>;
++		qcom,micbias2-microvolt = <1800000>;
++		qcom,micbias3-microvolt = <1800000>;
++		qcom,micbias4-microvolt = <1800000>;
++		qcom,mbhc-buttons-vthreshold-microvolt = <75000 150000 237000 500000 500000 500000 500000 500000>;
++		qcom,mbhc-headset-vthreshold-microvolt = <1700000>;
++		qcom,mbhc-headphone-vthreshold-microvolt = <50000>;
++		qcom,rx-device = <&wcd_rx>;
++		qcom,tx-device = <&wcd_tx>;
++
++		reset-gpios = <&tlmm 191 GPIO_ACTIVE_LOW>;
++
++		vdd-buck-supply = <&vreg_l15b_1p8>;
++		vdd-rxtx-supply = <&vreg_l15b_1p8>;
++		vdd-io-supply = <&vreg_l15b_1p8>;
++		vdd-mic-bias-supply = <&vreg_bob1>;
++
++		#sound-dai-cells = <1>;
++	};
++
+ 	gpio-keys {
+ 		compatible = "gpio-keys";
+ 		pinctrl-0 = <&hall_int_n_default>;
+@@ -155,6 +181,88 @@
+ 		};
+ 	};
+ 
++	sound {
++		compatible = "qcom,x1e80100-sndcard";
++		model = "X1E80100-ASUS-Vivobook-S15";
++		audio-routing = "SpkrLeft IN", "WSA WSA_SPK1 OUT",
++				"SpkrRight IN", "WSA WSA_SPK2 OUT",
++				"IN1_HPHL", "HPHL_OUT",
++				"IN2_HPHR", "HPHR_OUT",
++				"AMIC2", "MIC BIAS2",
++				"VA DMIC0", "MIC BIAS3",
++				"VA DMIC1", "MIC BIAS3",
++				"VA DMIC0", "VA MIC BIAS3",
++				"VA DMIC1", "VA MIC BIAS3",
++				"TX SWR_INPUT1", "ADC2_OUTPUT";
++
++		va-dai-link {
++			link-name = "VA Capture";
++
++			cpu {
++				sound-dai = <&q6apmbedai VA_CODEC_DMA_TX_0>;
++			};
++
++			codec {
++				sound-dai = <&lpass_vamacro 0>;
++			};
++
++			platform {
++				sound-dai = <&q6apm>;
++			};
++		};
++
++		wcd-capture-dai-link {
++			link-name = "WCD Capture";
++
++			cpu {
++				sound-dai = <&q6apmbedai TX_CODEC_DMA_TX_3>;
++			};
++
++			codec {
++				sound-dai = <&wcd938x 1>, <&swr2 1>,
++					    <&lpass_txmacro 0>;
++			};
++
++			platform {
++				sound-dai = <&q6apm>;
++			};
++		};
++
++		wcd-playback-dai-link {
++			link-name = "WCD Playback";
++
++			cpu {
++				sound-dai = <&q6apmbedai RX_CODEC_DMA_RX_0>;
++			};
++
++			codec {
++				sound-dai = <&wcd938x 0>, <&swr1 0>,
++					    <&lpass_rxmacro 0>;
++			};
++
++			platform {
++				sound-dai = <&q6apm>;
++			};
++		};
++
++		wsa-dai-link {
++			link-name = "WSA Playback";
++
++			cpu {
++				sound-dai = <&q6apmbedai WSA_CODEC_DMA_RX_0>;
++			};
++
++			codec {
++				sound-dai = <&left_spkr>, <&right_spkr>,
++					    <&swr0 0>, <&lpass_wsamacro 0>;
++			};
++
++			platform {
++				sound-dai = <&q6apm>;
++			};
++		};
++	};
++
+ 	reserved-memory {
+ 		linux,cma {
+ 			compatible = "shared-dma-pool";
+@@ -436,6 +544,13 @@
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+ 
++		vreg_l1b_1p8: ldo1 {
++			regulator-name = "vreg_l1b_1p8";
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1800000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
+ 		vreg_l2b_3p0: ldo2 {
+ 			regulator-name = "vreg_l2b_3p0";
+ 			regulator-min-microvolt = <3072000>;
+@@ -450,6 +565,14 @@
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+ 
++		vreg_l12b_1p2: ldo12 {
++			regulator-name = "vreg_l12b_1p2";
++			regulator-min-microvolt = <1200000>;
++			regulator-max-microvolt = <1200000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			regulator-always-on;
++		};
++
+ 		vreg_l13b_3p0: ldo13 {
+ 			regulator-name = "vreg_l13b_3p0";
+ 			regulator-min-microvolt = <3072000>;
+@@ -829,6 +952,24 @@
+ 	};
+ };
+ 
++&lpass_tlmm {
++	spkr_01_sd_n_active: spkr-01-sd-n-active-state {
++		pins = "gpio12";
++		function = "gpio";
++		drive-strength = <16>;
++		bias-disable;
++		output-low;
++	};
++};
++
++&lpass_vamacro {
++	pinctrl-0 = <&dmic01_default>;
++	pinctrl-names = "default";
++
++	vdd-micb-supply = <&vreg_l1b_1p8>;
++	qcom,dmic-sample-rate = <4800000>;
++};
++
+ &mdss {
+ 	status = "okay";
+ };
+@@ -1036,6 +1177,59 @@
+ 	vdd3-supply = <&vreg_l14b_3p0>;
+ };
+ 
++&swr0 {
++	status = "okay";
++
++	pinctrl-0 = <&wsa_swr_active>, <&spkr_01_sd_n_active>;
++	pinctrl-names = "default";
++
++	/* WSA8845, Left Speaker */
++	left_spkr: speaker@0,0 {
++		compatible = "sdw20217020400";
++		reg = <0 0>;
++		reset-gpios = <&lpass_tlmm 12 GPIO_ACTIVE_LOW>;
++		#sound-dai-cells = <0>;
++		sound-name-prefix = "SpkrLeft";
++		vdd-1p8-supply = <&vreg_l15b_1p8>;
++		vdd-io-supply = <&vreg_l12b_1p2>;
++		qcom,port-mapping = <1 2 3 7 10 13>;
++	};
++
++	/* WSA8845, Right Speaker */
++	right_spkr: speaker@0,1 {
++		compatible = "sdw20217020400";
++		reg = <0 1>;
++		reset-gpios = <&lpass_tlmm 12 GPIO_ACTIVE_LOW>;
++		#sound-dai-cells = <0>;
++		sound-name-prefix = "SpkrRight";
++		vdd-1p8-supply = <&vreg_l15b_1p8>;
++		vdd-io-supply = <&vreg_l12b_1p2>;
++		qcom,port-mapping = <4 5 6 7 11 13>;
++	};
++};
++
++&swr1 {
++	status = "okay";
++
++	/* WCD9385 RX */
++	wcd_rx: codec@0,4 {
++		compatible = "sdw20217010d00";
++		reg = <0 4>;
++		qcom,rx-port-mapping = <1 2 3 4 5>;
++	};
++};
++
++&swr2 {
++	status = "okay";
++
++	/* WCD9385 TX */
++	wcd_tx: codec@0,3 {
++		compatible = "sdw20217010d00";
++		reg = <0 3>;
++		qcom,tx-port-mapping = <2 2 3 4>;
++	};
++};
++
+ &tlmm {
+ 	gpio-reserved-ranges = <34 2>, /* Unused */
+ 			       <44 4>, /* SPI (TPM) */
+@@ -1156,6 +1350,14 @@
+ 		bias-disable;
+ 	};
+ 
++	wcd_default: wcd-reset-n-active-state {
++		pins = "gpio191";
++		function = "gpio";
++		drive-strength = <16>;
++		bias-disable;
++		output-low;
++	};
++
+ 	usb1_pwr_1p15_reg_en: usb1-pwr-1p15-reg-en-state {
+ 		pins = "gpio188";
+ 		function = "gpio";
