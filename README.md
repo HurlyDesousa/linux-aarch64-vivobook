@@ -8,6 +8,23 @@ This is **not** the omarchy-iso fork. Native-build on the laptop (X Elite).
 Dual-boots with stock `linux-aarch64`: this package does not Provide `linux`
 and does not Conflict the stock kernel.
 
+## Camera — Phase C (pkgrel 13)
+
+Live **7.2.2-12** already has CAMSS + CCI (video0–15, i2c-5..8, no
+sensor OF node, `ov02c10.ko` unmatched). `i2cdetect -y 5..8` is
+**all empty** with CCI queue timeouts. That means the sensor is
+**unpowered**, not that 0x36 is wrong. USB 1.2/1.8 V rails are
+already on, so those are the wrong supplies.
+
+`0008-x1e80100-vivobook-camera-phase-c.patch` adds the OV02C10 node
+on **CCI1 i2c1 (live i2c-8)**, pm8010 RGB rails, reset/MCLK, and the
+v7.2 CAMSS `port@3` (csiphy4) link. Does not rewrite 0003/0004.
+
+Install / VERIFY (probe **before** i2cdetect):
+[docs/camera-phase-c.md](docs/camera-phase-c.md).
+
+---
+
 ## Camera — Phase B (pkgrel 7)
 
 ### Phase B live results (7.2.0-6, pkg 7.2.2-6)
@@ -99,19 +116,21 @@ No sensor node is wired yet; that is Phase C after CCI is confirmed.
 | Board enable | `x1-asus-vivobook-s15.dtsi` | `&camss`, `&cci0`, `&cci1` status=okay |
 | `CONFIG_VIDEO_OV02C10=m` | `config.vivobook` | Module compiled, NOT bound (no DTS sensor node yet) |
 
-### What is left as TODO / Phase C
+### What Phase C did / still HUNCH
 
-- **Sensor node**: OV02C10 @ CCI1 i2c1 0x36 is a **HUNCH** — must be
-  confirmed by `i2cdetect` once CCI adapters appear.
-- **CSIPHY supply regulators**: `vdd-csiphy-0p8-supply` / `1p2-supply`
-  in the board DTS use `vreg_l1d_0p8` / `vreg_l3e_1p2` as guesses (no
-  pm8010 camera PMIC visible in Vivobook DTS).  Verify against BSP
-  schematic before wiring a sensor.
-- **PHY API**: upstream v13 CSIPHY series (Bryan O'Donoghue / Linaro,
-  still under review 2026-07) will replace embedded CSIPHY with
-  separate `csiphy@` nodes; update in a follow-up once merged.
-- **ACPI HID**: OVTI02C1 vs OVTI08X40 still unconfirmed from Vivobook
-  DSDT; not blocking this PR.
+Phase C (pkgrel 13, `0008`) adds the sensor node + pm8010 RGB rails.
+Remaining hunches (live confirm after install):
+
+- **Address / bus**: OV02C10 @ CCI1 i2c1 0x36 == live i2c-8. Empty
+  pre-Phase-C `i2cdetect` does not refute this.
+- **pm8010**: RPMh pmic-id `m`. If probe fails on regulators, this
+  PMIC is missing or the id is wrong.
+- **CSIPHY supplies**: still Phase A guesses (`vreg_l1d_0p8` /
+  `vreg_l3e_1p2`).
+- **PHY API**: upstream v13 CSIPHY series will replace embedded
+  CSIPHY; follow-up once merged.
+- **ACPI HID**: OVTI02C1 vs OVTI08X40 still unconfirmed; `0008`
+  binds OV02C10 and ships `CONFIG_VIDEO_OV08X40=m` for a swap.
 
 ### Post-boot checks
 
@@ -135,7 +154,8 @@ See `0003-x1e80100-vivobook-camera-phase-a.patch` for the full DTS.
 | `CONFIG_RESET_GPIO` | unset | **y** (WSA amp reset / unmute after ADSP) |
 | `CONFIG_POWER_RESET_GPIO` | y | unchanged |
 | `CONFIG_VIDEO_QCOM_IRIS` | unset | **m** (needs `qcvss8380.mbn`; decode still needs the module) |
-| `CONFIG_VIDEO_OV02C10` | unset | **m** (Phase A: module compiled, not bound — no sensor DTS yet) |
+| `CONFIG_VIDEO_OV02C10` | unset | **m** (Phase C: DTS binds `ovti,ov02c10` on CCI1 i2c1) |
+| `CONFIG_VIDEO_OV08X40` | unset | **m** (compiled, not bound — 4-lane alternative at 0x36) |
 | `CONFIG_QCOM_Q6V5_PAS` | m | unchanged |
 | `CONFIG_SND_SOC_SC8280XP` | m | unchanged |
 

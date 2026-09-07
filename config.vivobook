@@ -10,15 +10,11 @@ CONFIG_RESET_GPIO=y
 # Still needs qcvss8380.mbn in firmware (not in this repo).
 CONFIG_VIDEO_QCOM_IRIS=m
 #
-# OV02C10 front camera sensor module -- Phase A (2026).
-# Module compiled but NOT bound in Phase A (no sensor DTS node yet).
-# HUNCH: sensor is OV02C10 on CCI1 i2c1 @ 0x36; must be confirmed
-# by post-boot i2cdetect once CCI adapters appear (Phase B).
-# The ALARM base config already enables all required infrastructure:
-#   CONFIG_VIDEO_QCOM_CAMSS=m  (CAMSS ISP driver)
-#   CONFIG_I2C_QCOM_CCI=m      (CCI I2C adapter driver)
-#   CONFIG_CLK_X1E80100_CAMCC=m (Camera clock controller)
-#   CONFIG_MEDIA_CAMERA_SUPPORT=y
-#   CONFIG_V4L_PLATFORM_DRIVERS=y
-# This fragment only adds the sensor driver module.
+# OV02C10 front camera -- Phase C (2026). Sensor DTS is in 0008.
+# Live 7.2.2-12: module was on disk but unmatched (no OF node).
+# HUNCH: CCI1 i2c1 @ 0x36 == live i2c-8. Empty i2cdetect before this
+# DTB is expected (unpowered). OV08X40 is the 4-lane alternative at
+# the same address -- compile both; DTS binds only OV02C10.
+# ALARM already has CAMSS / CCI / CAMCC.
 CONFIG_VIDEO_OV02C10=m
+CONFIG_VIDEO_OV08X40=m
