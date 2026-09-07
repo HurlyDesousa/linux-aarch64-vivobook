@@ -183,7 +183,8 @@ _package-headers() {
   echo "Stripping build tools..."
   local file
   while read -rd '' file; do
-    case "$(file -bi "$file")" in
+    # file -S: skip seccomp (fakeroot triggers SIGSYS on semtimedop without it)
+    case "$(file -S -bi "$file")" in
       application/x-sharedlib\;*)      strip -v $STRIP_SHARED "$file" ;;
       application/x-archive\;*)        strip -v $STRIP_STATIC "$file" ;;
       application/x-executable\;*)     strip -v $STRIP_BINARIES "$file" ;;
