@@ -8,41 +8,46 @@ Pinned upstream: [stephan-gh/qebspil](https://github.com/stephan-gh/qebspil)
 `0001-main-fail-file-and-efivar-log.patch`.
 Built with `QEBSPIL_ALWAYS_START=1`.
 
-## Why acca195 missed `late-EBS enter`
+**Parked — stage only when Chief unparks.** Do not swap USB tonight.
 
-LIVE USB swap of the ebs-efivar-fixed binary: `QebspilAdsp` banner
-`ebs-efivar-fixed build` **OK** (load-time fixed 4 KiB NV write
-works). Rest **NUL-padded**. No `late-EBS enter`. No `[MAIN] stage=`.
+## acca195 LIVE (verbatim)
 
-That boot: Toby Limine **keymap-only unlock — skipped dtbloader**.
-Linux `PAS shutdown dtb 0x24: -22`. That is **invalid for AUTH
-comparison**. Prior good boots needed dtbloader→qebspil for `0x24: 0`.
+```
+qebspil: ebs-efivar-fixed build
+qebspil: Firmware 1 [DTB] …/adsp_dtbs.elf
+qebspil: Firmware 0 [MAIN] …/qcadsp8380.mbn
+qebspil: Firmware 1 [DTB] …/cdsp_dtbs.elf
+qebspil: Firmware 0 [MAIN] …/qccdsp8380.mbn
+(+ same 4 lines once more)
+```
 
-Upstream `efi_dtb_changed()`:
+No `late-EBS enter`. No `stage=INIT|AUTH`. Linux this boot:
+`0x24: -22` and `0x1: -22`.
 
-1. `LibGetSystemConfigurationTable(EfiDtbTableGuid)` — no GUID →
-   return SUCCESS
-2. `dtb_enumerate_rprocs` — `EFI_NOT_FOUND` → return SUCCESS
-3. **Only then** `event_register_late_ebs_callback(efi_late_ebs)`
+**Contradiction:** Firmware/prepare lines mean remotes **were**
+found and prepared this load. That is **not** a zero-remote path
+and is **not** explained by “skipped dtbloader → no remotes”.
+`efi_dtb_changed` ran twice (same as 72634c6). Load-time 4 KiB NV
+write worked.
 
-No GUID / remotecount=0 → **callback never registered** →
-`pil_finish_all` **never runs** → SetVariable at EBS is **never
-attempted**. Fixed-size NV cannot persist a line that is never
-written. qebspil still loaded (banner proves it).
+`0x24: -22` means DTB was **not** left AUTH’d. Prepare ≠ AUTH.
+
+Prefer: late-EBS callback **never registered**, **never fired**,
+or **SetVariable at EBS failed** despite the fixed 4 KiB slot.
 
 ## What this binary does
 
-- Banner: `qebspil: ebs-always-register build` (not
-  `ebs-efivar-fixed`)
-- Same GUID, same **fixed 4 KiB NV** `QebspilAdsp` in-place
-  `SetVariable`. Never FAT / Print at EBS
-- Load-time always persists: banner, `persist SetVariable status=`,
-  `late-EBS registered status=`, `EfiDtbTableGuid missing|found`,
-  `remotecount=N`
-- **Always** registers `efi_late_ebs` at load (not gated on the
-  DTB table or remotes)
-- Late-EBS always writes `late-EBS enter remotecount=N` even if
-  N=0; then per-component INIT/AUTH when N>0
+- Banner: `qebspil: ebs-register-status build`
+- Same GUID, same **fixed 4 KiB NV** `QebspilAdsp`. Never FAT /
+  Print at EBS
+- **Always** registers `efi_late_ebs` at load
+- Load-time: banner, `persist SetVariable status=`, `late-EBS
+  registered status=`, `EfiDtbTableGuid found|missing`,
+  `remotecount=N`, then `late-EBS armed remotecount=N
+  registered=0x…` **after** prepare
+- Late-EBS: `late-EBS enter remotecount=N` even if N=0, then
+  `late-EBS persist SetVariable status=0x…`, then INIT/AUTH when
+  N>0
 
 ## EFI variables (GUID `6b7c0a11-24e1-4a01-9e80-11ad50010024`)
 
@@ -52,47 +57,18 @@ written. qebspil still loaded (banner proves it).
 | `QebspilEbs` | 256 B NV | last stage line, NUL-padded |
 
 ```
-# skip 4-byte EFI attribute prefix
 dd if=/sys/firmware/efi/efivars/QebspilAdsp-6b7c0a11-24e1-4a01-9e80-11ad50010024 \
    bs=1 skip=4 status=none; echo
 ```
 
-| load-time line | meaning |
-|----------------|---------|
-| `ebs-always-register build` | new binary is on the stick |
-| `persist SetVariable status=0x0` | 4 KiB NV write still works |
-| `late-EBS registered status=0x0` | callback **exists** |
-| `EfiDtbTableGuid missing` | keymap-only / no dtbloader |
-| `remotecount=0` | no prepared rprocs; no MAIN stages this boot |
-| `remotecount=2` + `EfiDtbTableGuid found` | dtbloader path; expect INIT/AUTH at EBS |
-
-| late-EBS line | meaning |
-|---------------|---------|
-| `late-EBS enter remotecount=N` | callback **ran** (even if N=0) |
-| `[MAIN] pas=0x1 stage=INIT\|AUTH` | only when N>0 (needs dtbloader) |
-| no enter, but registered 0x0 | EBS persist failed or callback never fired |
-
-Keymap-only unlock **without dtbloader** is invalid for 0x24 AUTH.
-Next collect of MAIN stages needs a **full dtbloader→qebspil** boot.
-
-LIVE no-reuse (`0x24: 0`, `0x1: -22`) still prefers **MAIN INIT** fail
-on that proper path:
-
-```
-qebspil: qcom,x1e80100-adsp-pas [MAIN] pas=0x1 stage=INIT status=0x…
-```
-
-vs `stage=AUTH`. AUTH-fail of MAIN would have dropped DTB.
-
-## Next Omarchy step (the binary)
-
-Replace USB `qebspilaa64.efi` only (same stick as dtbloader + MATCH
-firmware). Do not rebuild the kernel. Do not enable
-`attach_running_main`. After next **full dtbloader→qebspil** boot:
-**efivar only** (the `dd` above). No ConOut, no photo, no USB log.
-
-```
-cp qebspil/qebspilaa64.efi /path/to/that/volume/qebspilaa64.efi
-```
+| line | meaning |
+|------|---------|
+| `ebs-register-status build` | this binary |
+| `late-EBS registered status=0x0` | `CreateEvent(EBS)` succeeded |
+| `late-EBS armed remotecount=2 registered=0x0` | remotes + callback coexist at load (acca195-shaped) |
+| `late-EBS enter remotecount=N` | callback **ran** |
+| `late-EBS persist SetVariable status=0x0` | EBS in-place NV write worked |
+| armed + registered 0x0, **no** enter | never fired, **or** EBS SetVariable failed |
+| `[MAIN] pas=0x1 stage=INIT\|AUTH` | AUTH path (N>0 only) |
 
 Rebuild (optional): `./qebspil/build-main-fail-log.sh`

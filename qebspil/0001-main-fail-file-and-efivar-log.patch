@@ -26,10 +26,10 @@ index 294395e..4e40343 100644
  
 diff --git a/src/log.c b/src/log.c
 new file mode 100644
-index 0000000..f2a3b2b
+index 0000000..ae8a548
 --- /dev/null
 +++ b/src/log.c
-@@ -0,0 +1,210 @@
+@@ -0,0 +1,211 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Persist pil_finish stages so Omarchy can read INIT vs AUTH without ConOut.
@@ -48,13 +48,14 @@ index 0000000..f2a3b2b
 + * create it at a fixed 4 KiB. Every persist, including late EBS, is an
 + * in-place same-size update — no FTW realloc, no FAT, no ConOut.
 + *
-+ * acca195 LIVE: banner `ebs-efivar-fixed build` OK; rest NUL-padded.
-+ * No `late-EBS enter`. That boot skipped dtbloader (keymap-only
-+ * Limine unlock). Upstream registers efi_late_ebs only after
-+ * EfiDtbTableGuid + remotecount>0, so the callback never existed
-+ * and SetVariable at EBS was never tried. This build still uses
-+ * the 4 KiB slot; it also always registers late-EBS and always
-+ * writes `late-EBS enter remotecount=N`.
++ * acca195 LIVE (verbatim): banner + Firmware DTB/MAIN for
++ * adsp+cdsp (repeated once). Remotes WERE prepared. No
++ * `late-EBS enter` / no stage=. Linux 0x24:-22 and 0x1:-22 —
++ * prepare ≠ AUTH. Not a zero-remote path. Prefer: callback
++ * never registered, never fired, or SetVariable at EBS failed
++ * despite the 4 KiB slot. This build always registers late-EBS
++ * and persists register status, armed remotecount, enter, and
++ * the EBS SetVariable status.
 + */
 +
 +#include <stdarg.h>
@@ -241,22 +242,32 @@ index 0000000..f2a3b2b
 +	return st;
 +}
 diff --git a/src/main.c b/src/main.c
-index 8262564..65c46fb 100644
+index 8262564..c81a4c0 100644
 --- a/src/main.c
 +++ b/src/main.c
-@@ -14,8 +14,20 @@ static EFI_EVENT ebs_event;
+@@ -10,12 +10,29 @@
+ 
+ EFI_LOADED_IMAGE_PROTOCOL *LoadedImage;
+ static EFI_EVENT ebs_event;
++static EFI_STATUS ebs_reg_status = EFI_NOT_READY;
+ 
  static EFI_STATUS efi_late_ebs(void)
  {
- 	EFI_STATUS status;
+-	EFI_STATUS status;
++	EFI_STATUS status, persist_st;
 +	UINTN n = pil_count();
 +
 +	qebspil_log_enter_ebs();
 +	/*
-+	 * Always persist enter, even when remotecount is 0. That is the
-+	 * only way a keymap-only / no-DTB boot can prove EBS fired.
-+	 * Never Print / FAT here.
++	 * Always persist enter, even when remotecount is 0. Never
++	 * Print / FAT here. Then persist the SetVariable status of
++	 * that enter write so a prepare-OK / AUTH-missing boot can
++	 * tell "callback ran" from "callback ran, persist failed".
 +	 */
 +	qebspil_logf("qebspil: late-EBS enter remotecount=%d", n);
++	persist_st = qebspil_log_persist();
++	qebspil_logf("qebspil: late-EBS persist SetVariable status=0x%lx",
++		     (UINTN)persist_st);
 +	qebspil_log_persist();
  
  	status = pil_finish_all();
@@ -265,7 +276,7 @@ index 8262564..65c46fb 100644
  	if (status == EFI_NOT_FOUND)
  		return EFI_SUCCESS; /* No rempteprocs found */
  	if (!EFI_ERROR(status))
-@@ -37,35 +49,65 @@ static EFI_STATUS efi_dtb_changed(void)
+@@ -37,35 +54,69 @@ static EFI_STATUS efi_dtb_changed(void)
  	pil_free_all();
  
  	status = LibGetSystemConfigurationTable(&EfiDtbTableGuid, &dtb);
@@ -301,30 +312,33 @@ index 8262564..65c46fb 100644
 -		status = event_register_late_ebs_callback(&ebs_event, efi_late_ebs);
 -		if (EFI_ERROR(status))
 -			return status;
--	}
 +/*
-+ * acca195 / ebs-efivar-fixed: load-time 4 KiB NV write worked (banner
-+ * only). late-EBS enter never appeared because upstream registers
-+ * efi_late_ebs only after EfiDtbTableGuid + at least one prepared
-+ * remoteproc. Keymap-only Limine unlock skips dtbloader → no GUID →
-+ * remotecount=0 → callback never registered → pil_finish_all never
-+ * runs. SetVariable at EBS was never attempted on that boot.
++ * acca195 LIVE (verbatim): banner + Firmware DTB/MAIN for adsp+cdsp
++ * (repeated once). Remotes WERE prepared. No late-EBS enter / no
++ * stage=. Linux 0x24:-22 and 0x1:-22 — prepare ≠ AUTH.
 + *
-+ * Always register late-EBS at load. Persist remotecount + register
-+ * status so a zero-remote boot still proves the callback exists.
++ * That is not a zero-remote / skipped-dtbloader path. Upstream still
++ * gates register on GUID+remotes, so CreateEvent may have run and
++ * failed, the callback may never have fired, or SetVariable at EBS
++ * may have failed despite the 4 KiB slot. Always register at load;
++ * log register status + remotecount after prepare; persist enter
++ * and the EBS SetVariable status.
 + */
 +static EFI_STATUS efi_register_late_ebs(void)
 +{
-+	EFI_STATUS status;
-+
-+	if (ebs_event)
++	if (ebs_event) {
++		qebspil_logf("qebspil: late-EBS already registered status=0x%lx",
++			     (UINTN)ebs_reg_status);
++		qebspil_log_persist();
 +		return EFI_SUCCESS;
+ 	}
  
 -	return EFI_SUCCESS;
-+	status = event_register_late_ebs_callback(&ebs_event, efi_late_ebs);
-+	qebspil_logf("qebspil: late-EBS registered status=0x%lx", (UINTN)status);
++	ebs_reg_status = event_register_late_ebs_callback(&ebs_event, efi_late_ebs);
++	qebspil_logf("qebspil: late-EBS registered status=0x%lx",
++		     (UINTN)ebs_reg_status);
 +	qebspil_log_persist();
-+	return status;
++	return ebs_reg_status;
  }
  
  EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
@@ -336,14 +350,14 @@ index 8262564..65c46fb 100644
  	InitializeLib(image, system_table);
  
  	Print(u"Hello World!\n");
-+	qebspil_log("qebspil: ebs-always-register build");
++	qebspil_log("qebspil: ebs-register-status build");
 +	persist_st = qebspil_log_persist();
 +	qebspil_logf("qebspil: persist SetVariable status=0x%lx", (UINTN)persist_st);
 +	qebspil_log_persist();
  
  	status = BS->HandleProtocol(image, &LoadedImageProtocol, (VOID**)&LoadedImage);
  	if (EFI_ERROR(status))
-@@ -75,9 +117,19 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
+@@ -75,9 +126,25 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
  	if (EFI_ERROR(status))
  		return status;
  
@@ -361,7 +375,13 @@ index 8262564..65c46fb 100644
 +	}
 +
 +	status = efi_dtb_changed();
-+	qebspil_logf("qebspil: remotecount=%d", pil_count());
++	/*
++	 * After prepare: remotes + callback coexist. acca195 had
++	 * Firmware lines (remotes) but no enter — this line is the
++	 * load-time proof that register ran after those prepares.
++	 */
++	qebspil_logf("qebspil: late-EBS armed remotecount=%d registered=0x%lx",
++		     pil_count(), (UINTN)ebs_reg_status);
 +	qebspil_log_persist();
 +	return status;
  }

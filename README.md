@@ -246,24 +246,27 @@ ELF is expected after tearing down UEFI 0x24. Preferred: main
 `scm_pil_init` failed (no DTB rollback); AUTH-fail of main would
 have dropped 0x24. **HOLD** `attach_running_main`.
 
-**7.2.2-11 acca195 USB-swap collect** (pkgrel 11 held): banner
-`ebs-efivar-fixed build` **OK** (load-time 4 KiB NV write works).
-Still **no** `late-EBS enter` / **no** `[MAIN] stage=` (rest
-NUL-padded). That boot: Toby Limine **keymap-only unlock —
-skipped dtbloader** → Linux `PAS shutdown dtb 0x24: -22`. That
-PAS line is **invalid for AUTH comparison**; prior good boots
-needed dtbloader→qebspil for `0x24: 0`.
+**7.2.2-11 acca195 USB-swap collect** (pkgrel 11 held), verbatim:
 
-**Root cause (upstream `efi_dtb_changed`):** `efi_late_ebs` is
-registered **only after** `EfiDtbTableGuid` + at least one
-prepared remoteproc. No GUID / remotecount=0 → callback **never
-registered** → `pil_finish_all` **never runs** → SetVariable at
-EBS is never attempted. qebspil still loaded (banner). Next
-binary **always** registers late-EBS and always writes
-`late-EBS enter remotecount=N`. **HOLD** `attach_running_main`.
-Copy [qebspil/qebspilaa64.efi](qebspil/qebspilaa64.efi) over the
-live efi (`ebs-always-register`; paste `QebspilAdsp` only). No
-ConOut photo.
+```
+qebspil: ebs-efivar-fixed build
+qebspil: Firmware 1 [DTB] …/adsp_dtbs.elf
+qebspil: Firmware 0 [MAIN] …/qcadsp8380.mbn
+qebspil: Firmware 1 [DTB] …/cdsp_dtbs.elf
+qebspil: Firmware 0 [MAIN] …/qccdsp8380.mbn
+(+ same 4 lines once more)
+```
+
+No `late-EBS enter` / no `stage=`. Linux `0x24: -22` and
+`0x1: -22`. **Contradiction:** Firmware lines mean remotes
+**were** found+prepared (not a zero-remote / skipped-dtbloader
+path). Load-time 4 KiB NV worked. `0x24: -22` = DTB not left
+AUTH’d (prepare ≠ AUTH). Prefer: late-EBS **never registered**,
+**never fired**, or **SetVariable at EBS failed** despite fixed
+size. Next efi (`ebs-register-status`) always registers and
+persists register + EBS SetVariable status. **HOLD**
+`attach_running_main`. **Parked — stage only when Chief unparks.**
+No ConOut photo.
 
 See [docs/adsp-22.md](docs/adsp-22.md) and the operator recipe
 [docs/qebspil-dtbloader.md](docs/qebspil-dtbloader.md)
@@ -275,24 +278,13 @@ Patches live at repo root as
 `0006-x1e-adsp-attach-running-main.patch` (makepkg `source=()`
 basenames; copies under `patches/` are optional).
 
-After next full dtbloader→qebspil boot into `7.2.2-11-aarch64-vivobook`:
-
-```
-dmesg | grep -E 'PAS shutdown|initializing firmware|attaching to|reusing UEFI|attach_running_main'
-cat /sys/class/remoteproc/remoteproc0/state
-cat /sys/class/power_supply/qcom-battmgr-bat/capacity
-aplay -l
-```
-
 Daily boot: no extra flags (attach-to-lite). dtbloader then
 ALWAYS_START qebspil is already staged. No-reuse dump: `0x24: 0`,
-`0x1: -22`. Keymap-only unlock **without dtbloader** is invalid
-for 0x24 AUTH (`0x24: -22` on that path). Next is copy
-[qebspil/qebspilaa64.efi](qebspil/qebspilaa64.efi) onto the live
-stick (`ebs-always-register`: register status + `late-EBS enter
-remotecount=N`; MAIN INIT vs AUTH only when remotecount>0) — not
-`attach_running_main`, not the USB log. After EBS AUTH of 0x1 only:
-Limine cmdline `qcom_q6v5_pas.attach_running_main=1`.
+`0x1: -22`. acca195 prepare-OK / AUTH-missing: `0x24: -22` +
+`0x1: -22`. Logger tip is on [qebspil/qebspilaa64.efi](qebspil/qebspilaa64.efi)
+(`ebs-register-status`). **Parked — stage only when Chief unparks.**
+After EBS AUTH of 0x1 only: Limine cmdline
+`qcom_q6v5_pas.attach_running_main=1`.
 
 ## Build and install (on the Vivobook)
 

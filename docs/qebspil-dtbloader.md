@@ -11,16 +11,16 @@ That line is prepare only. USB `/firmware/...` next to qebspil
 → attach-to-lite. Late EBS **ran**; Insyde TPL is **not** totally
 dead. Main never left up. The 72634c6 file+NV logger **missed `pil_finish` stages** (931 B
 efivar == USB log; path lines only, repeated once). #14 volatile
-still grew the var at EBS. acca195 **ebs-efivar-fixed** 4 KiB NV
-wrote the banner at load; this boot skipped dtbloader (keymap-only
-Limine unlock) so `efi_late_ebs` was **never registered** (no
-`EfiDtbTableGuid` / remotecount=0) and `late-EBS enter` never
-appeared. `PAS shutdown dtb 0x24: -22` on that boot is **invalid
-for AUTH comparison**. Next gate is **ebs-always-register**: copy
-[qebspil/qebspilaa64.efi](../qebspil/qebspilaa64.efi) over the live
-ALWAYS_START efi. After next **full dtbloader→qebspil** boot, paste
-**efivar only** (`QebspilAdsp`, `dd … skip=4`). INIT-fail preferred
-— no DTB rollback. **HOLD** `attach_running_main`. No ConOut photo.
+still grew the var at EBS. acca195 **ebs-efivar-fixed** verbatim:
+banner + Firmware DTB/MAIN for adsp+cdsp (repeated once). Remotes
+**were** prepared. No `late-EBS enter` / no stage=. Linux
+`0x24: -22` and `0x1: -22` — prepare ≠ AUTH. **Not** a
+zero-remote / skipped-dtbloader path. Prefer: callback never
+registered, never fired, or SetVariable at EBS failed despite
+4 KiB. Next efi is **ebs-register-status** in
+[qebspil/qebspilaa64.efi](../qebspil/qebspilaa64.efi).
+**Parked — stage only when Chief unparks.** **HOLD**
+`attach_running_main`. No ConOut photo.
 
 ## Why this recipe exists
 
@@ -195,10 +195,10 @@ justified qebspil edit (fixed 4 KiB NV; always register late-EBS;
 TPL/Stall untouched).
 
 Upstream registers `efi_late_ebs` **only** after
-`EfiDtbTableGuid` + remotecount>0. No table → callback never
-exists → `pil_finish_all` never runs. The patched efi registers
-that callback at load and always writes
-`late-EBS enter remotecount=N`.
+`EfiDtbTableGuid` + remotecount>0. acca195 **had** prepare
+lines, so that gate is not the zero-remote miss. The patched efi
+always registers at load and persists register status, armed
+remotecount, enter, and EBS SetVariable status.
 
 ### Insyde + TPL hack (retired as primary)
 
@@ -209,17 +209,12 @@ TPL poke is **retired**: no-reuse `0x24: 0` means `pil_finish`
 ran. TPL can still be flaky; it is not the “0x24 up, 0x1 never”
 explanation.
 
-## Next: copy the ebs-always-register EFI (efivar only)
+## Next efi (parked)
 
 ConOut photo is **retired**. Prebuilt
 [qebspil/qebspilaa64.efi](../qebspil/qebspilaa64.efi) (`ALWAYS_START=1`
-+ ebs-always-register). Copy it over the live `qebspilaa64.efi` on the
-same volume as dtbloader + MATCH firmware. After next **full
-dtbloader→qebspil** boot, **efivar only** — no USB log, no photo.
-Keymap-only unlock without dtbloader is **invalid** for 0x24 AUTH
-and will show `EfiDtbTableGuid missing` / `remotecount=0` (still
-useful: proves register + enter). Recipe:
-[qebspil/README.md](../qebspil/README.md).
++ ebs-register-status) is on tip. **Parked — stage only when
+Chief unparks.** Recipe: [qebspil/README.md](../qebspil/README.md).
 
 ```
 dd if=/sys/firmware/efi/efivars/QebspilAdsp-6b7c0a11-24e1-4a01-9e80-11ad50010024 \
@@ -234,8 +229,9 @@ dd if=/sys/firmware/efi/efivars/QebspilAdsp-6b7c0a11-24e1-4a01-9e80-11ad50010024
 | `AUTH ok (DTB+MAIN)` | claims AUTH of 0x24 **and** 0x1 | then default boot `PAS shutdown main (id=0x1): 0` |
 
 USB `/firmware/...` next to `qebspilaa64.efi` is **already MATCH**.
-Do not re-hash. **HOLD** `attach_running_main`. Next collect of
-MAIN stages **requires** dtbloader→qebspil.
+Do not re-hash. **HOLD** `attach_running_main`. acca195 already
+proved prepare on this stick (Firmware lines). Missing piece is
+late-EBS register / fire / EBS SetVariable.
 
 `ALWAYS_START` / missing `qcom,broken-reset` skip the **whole**
 rproc at enumerate — they do **not** start DTB and skip main.
@@ -287,12 +283,11 @@ error -22 initializing …/adsp_dtbs.elf
 `0x24: 0` = late EBS ran; DTB left up (INIT and/or AUTH). Insyde
 TPL is **not** totally dead. `0x1: -22` = main never left up.
 NS `-22` on `adsp_dtbs.elf` is **expected** after tearing down
-UEFI 0x24. Audio still Dummy. The remaining ask is **copy**
-[qebspil/qebspilaa64.efi](../qebspil/qebspilaa64.efi) onto that
-volume, then after next **full dtbloader→qebspil** boot read
-efivar `QebspilAdsp` (`dd … skip=4`). Not the USB log (FAT is down
-at EBS). Not a photo. Not another PAS dump. Not a keymap-only
-unlock (that skips dtbloader; `0x24: -22` is invalid for AUTH).
+UEFI 0x24. Audio still Dummy. acca195 then showed prepare-OK /
+AUTH-missing (`0x24: -22`). Logger tip is
+[qebspil/qebspilaa64.efi](../qebspil/qebspilaa64.efi).
+**Parked — stage only when Chief unparks.** Not a photo. Not
+another PAS dump.
 
 If EBS AUTH of **main PAS 0x1** succeeded, first confirm the next
 **default** boot shows `PAS shutdown main (id=0x1): 0`. Only then A/B
@@ -312,13 +307,15 @@ qcom_q6v5_pas.attach_running_main=1
 - Not another NS `PAS_INIT` kernel tweak. That does not publish the
   DTB table and does not AUTH 0x1. pkgrel stays 11.
 - Not a reason to fork Limine or patch qebspil TPL / Stall. The
-  ebs-always-register patch in `qebspil/` is the justified
-  edit (prebuilt `qebspilaa64.efi` ready to copy).
+  ebs-register-status patch in `qebspil/` is the justified
+  edit (prebuilt `qebspilaa64.efi` on tip).
+  **Parked — stage only when Chief unparks.**
 - Not a TZ signature fix. Found-remoteproc + lite still has no
   audio until UEFI AUTH of full ADSP (main 0x1).
 - Not a missing `/firmware` path on this USB (MATCH closed).
-- Not “late EBS never fired / Insyde TPL dead” as primary
-  (no-reuse `0x24: 0` retired that).
+- No-reuse `0x24: 0` retired “TPL totally dead” for **that**
+  boot. acca195 prepare-OK + `0x24: -22` re-opens
+  never-registered / never-fired / EBS SetVariable fail.
 - Not a kernel that keeps UEFI 0x24 and NS-`AUTH_RESET`s main
   only. REUSE_PARTIAL already kept 0x24; NS `PAS_INIT` of
   `qcadsp8380.mbn` was -22. **HOLD** `attach_running_main`.
