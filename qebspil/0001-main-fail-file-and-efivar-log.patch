@@ -26,10 +26,10 @@ index 294395e..4e40343 100644
  
 diff --git a/src/log.c b/src/log.c
 new file mode 100644
-index 0000000..da796ef
+index 0000000..f2a3b2b
 --- /dev/null
 +++ b/src/log.c
-@@ -0,0 +1,202 @@
+@@ -0,0 +1,210 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Persist pil_finish stages so Omarchy can read INIT vs AUTH without ConOut.
@@ -47,6 +47,14 @@ index 0000000..da796ef
 + * Fix: keep QebspilAdsp NV|BS|RT (Linux visibility proven). At load,
 + * create it at a fixed 4 KiB. Every persist, including late EBS, is an
 + * in-place same-size update — no FTW realloc, no FAT, no ConOut.
++ *
++ * acca195 LIVE: banner `ebs-efivar-fixed build` OK; rest NUL-padded.
++ * No `late-EBS enter`. That boot skipped dtbloader (keymap-only
++ * Limine unlock). Upstream registers efi_late_ebs only after
++ * EfiDtbTableGuid + remotecount>0, so the callback never existed
++ * and SetVariable at EBS was never tried. This build still uses
++ * the 4 KiB slot; it also always registers late-EBS and always
++ * writes `late-EBS enter remotecount=N`.
 + */
 +
 +#include <stdarg.h>
@@ -207,12 +215,12 @@ index 0000000..da796ef
 +	root->Close(root);
 +}
 +
-+void qebspil_log_persist(void)
++EFI_STATUS qebspil_log_persist(void)
 +{
 +	EFI_STATUS st;
 +
 +	if (!loglen)
-+		return;
++		return EFI_NOT_READY;
 +
 +	if (!log_ebs)
 +		log_alloc_runtime();
@@ -222,45 +230,143 @@ index 0000000..da796ef
 +		SetMem(logbuf + loglen, LOG_MAX - loglen, 0);
 +
 +	st = log_set_fixed(u"QebspilAdsp", logbuf, LOG_MAX, logbuf, loglen);
-+	(void)st;
 +	log_set_last_line();
 +
 +	if (log_ebs)
-+		return;
++		return st;
 +
 +	Print(u"qebspil: log var persist: %r (%d bytes, slot %d)\n",
 +	      st, loglen, LOG_MAX);
 +	log_persist_file();
++	return st;
 +}
 diff --git a/src/main.c b/src/main.c
-index 8262564..3ad751b 100644
+index 8262564..65c46fb 100644
 --- a/src/main.c
 +++ b/src/main.c
-@@ -15,7 +15,13 @@ static EFI_STATUS efi_late_ebs(void)
+@@ -14,8 +14,20 @@ static EFI_EVENT ebs_event;
+ static EFI_STATUS efi_late_ebs(void)
  {
  	EFI_STATUS status;
- 
-+	qebspil_log_enter_ebs();
-+	qebspil_log("qebspil: late-EBS enter");
-+	qebspil_log_persist();
++	UINTN n = pil_count();
 +
++	qebspil_log_enter_ebs();
++	/*
++	 * Always persist enter, even when remotecount is 0. That is the
++	 * only way a keymap-only / no-DTB boot can prove EBS fired.
++	 * Never Print / FAT here.
++	 */
++	qebspil_logf("qebspil: late-EBS enter remotecount=%d", n);
++	qebspil_log_persist();
+ 
  	status = pil_finish_all();
 +	qebspil_logf("qebspil: late-EBS pil_finish_all status=0x%lx", (UINTN)status);
 +	qebspil_log_persist();
  	if (status == EFI_NOT_FOUND)
  		return EFI_SUCCESS; /* No rempteprocs found */
  	if (!EFI_ERROR(status))
-@@ -66,6 +72,8 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
+@@ -37,35 +49,65 @@ static EFI_STATUS efi_dtb_changed(void)
+ 	pil_free_all();
+ 
+ 	status = LibGetSystemConfigurationTable(&EfiDtbTableGuid, &dtb);
+-	if (status == EFI_NOT_FOUND)
++	if (status == EFI_NOT_FOUND) {
++		qebspil_log("qebspil: EfiDtbTableGuid missing");
++		qebspil_log_persist();
+ 		return EFI_SUCCESS; /* DTB was removed */
+-	if (EFI_ERROR(status))
++	}
++	if (EFI_ERROR(status)) {
++		qebspil_logf("qebspil: EfiDtbTableGuid status=0x%lx", (UINTN)status);
++		qebspil_log_persist();
+ 		return status;
++	}
++
++	qebspil_log("qebspil: EfiDtbTableGuid found");
++	qebspil_log_persist();
+ 
+ 	status = dtb_enumerate_rprocs(dtb);
++	qebspil_logf("qebspil: remotecount=%d enumerate=0x%lx",
++		     pil_count(), (UINTN)status);
++	qebspil_log_persist();
+ 	if (status == EFI_NOT_FOUND)
+ 		return EFI_SUCCESS; /* No remoteprocs found */
+-	if (EFI_ERROR(status))
+-		return status;
++	return status;
++}
+ 
+-	/* Register late EBS event (if not already) to start the rprocs later */
+-	if (!ebs_event) {
+-		status = event_register_late_ebs_callback(&ebs_event, efi_late_ebs);
+-		if (EFI_ERROR(status))
+-			return status;
+-	}
++/*
++ * acca195 / ebs-efivar-fixed: load-time 4 KiB NV write worked (banner
++ * only). late-EBS enter never appeared because upstream registers
++ * efi_late_ebs only after EfiDtbTableGuid + at least one prepared
++ * remoteproc. Keymap-only Limine unlock skips dtbloader → no GUID →
++ * remotecount=0 → callback never registered → pil_finish_all never
++ * runs. SetVariable at EBS was never attempted on that boot.
++ *
++ * Always register late-EBS at load. Persist remotecount + register
++ * status so a zero-remote boot still proves the callback exists.
++ */
++static EFI_STATUS efi_register_late_ebs(void)
++{
++	EFI_STATUS status;
++
++	if (ebs_event)
++		return EFI_SUCCESS;
+ 
+-	return EFI_SUCCESS;
++	status = event_register_late_ebs_callback(&ebs_event, efi_late_ebs);
++	qebspil_logf("qebspil: late-EBS registered status=0x%lx", (UINTN)status);
++	qebspil_log_persist();
++	return status;
+ }
+ 
+ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
+ {
+-	EFI_STATUS status;
++	EFI_STATUS status, persist_st;
+ 	EFI_EVENT event;
+ 
  	InitializeLib(image, system_table);
  
  	Print(u"Hello World!\n");
-+	qebspil_log("qebspil: ebs-efivar-fixed build");
++	qebspil_log("qebspil: ebs-always-register build");
++	persist_st = qebspil_log_persist();
++	qebspil_logf("qebspil: persist SetVariable status=0x%lx", (UINTN)persist_st);
 +	qebspil_log_persist();
  
  	status = BS->HandleProtocol(image, &LoadedImageProtocol, (VOID**)&LoadedImage);
  	if (EFI_ERROR(status))
+@@ -75,9 +117,19 @@ EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table)
+ 	if (EFI_ERROR(status))
+ 		return status;
+ 
+-	status = event_register_group_callback(&EfiDtbTableGuid, &event, efi_dtb_changed);
++	status = efi_register_late_ebs();
+ 	if (EFI_ERROR(status))
+ 		return status;
+ 
+-	return efi_dtb_changed();
++	status = event_register_group_callback(&EfiDtbTableGuid, &event, efi_dtb_changed);
++	if (EFI_ERROR(status)) {
++		qebspil_logf("qebspil: DTB-group callback status=0x%lx", (UINTN)status);
++		qebspil_log_persist();
++		return status;
++	}
++
++	status = efi_dtb_changed();
++	qebspil_logf("qebspil: remotecount=%d", pil_count());
++	qebspil_log_persist();
++	return status;
+ }
 diff --git a/src/pil.c b/src/pil.c
-index 1a7d7d4..9cc3fe3 100644
+index 1a7d7d4..c8018e6 100644
 --- a/src/pil.c
 +++ b/src/pil.c
 @@ -14,10 +14,19 @@
@@ -285,7 +391,24 @@ index 1a7d7d4..9cc3fe3 100644
  struct pil *pil_alloc(const struct pil_type *type)
  {
  	for (UINTN i = 0; i < ARRAY_SIZE(loaded_pil); i++) {
-@@ -96,18 +105,17 @@ static EFI_STATUS pil_finish(struct pil *pil)
+@@ -34,6 +43,16 @@ struct pil *pil_alloc(const struct pil_type *type)
+ 	return NULL;
+ }
+ 
++UINTN pil_count(void)
++{
++	UINTN n = 0;
++
++	for (UINTN i = 0; i < ARRAY_SIZE(loaded_pil); i++)
++		if (loaded_pil[i].type)
++			n++;
++	return n;
++}
++
+ EFI_STATUS pil_proxy_vote(const EFI_GUID *guid)
+ {
+ 	PIL_PROXY_PROTOCOL *proxy;
+@@ -96,18 +115,17 @@ static EFI_STATUS pil_finish(struct pil *pil)
  {
  	EFI_STATUS status;
  
@@ -308,7 +431,7 @@ index 1a7d7d4..9cc3fe3 100644
  	}
  
  	for (enum pil_component c = 0; c < PIL_COMPONENTS; c++) {
-@@ -115,11 +123,9 @@ static EFI_STATUS pil_finish(struct pil *pil)
+@@ -115,11 +133,9 @@ static EFI_STATUS pil_finish(struct pil *pil)
  			continue;
  
  		status = fw_load_metadata(&pil->fw[c]);
@@ -322,7 +445,7 @@ index 1a7d7d4..9cc3fe3 100644
  	}
  
  	for (enum pil_component c = 0; c < PIL_COMPONENTS; c++) {
-@@ -129,18 +135,14 @@ static EFI_STATUS pil_finish(struct pil *pil)
+@@ -129,18 +145,14 @@ static EFI_STATUS pil_finish(struct pil *pil)
  			continue;
  
  		status = scm_pil_init(pil->type->id[c].full, fw->metadata);
@@ -345,7 +468,7 @@ index 1a7d7d4..9cc3fe3 100644
  	}
  
  	for (enum pil_component c = 0; c < PIL_COMPONENTS; c++) {
-@@ -148,11 +150,9 @@ static EFI_STATUS pil_finish(struct pil *pil)
+@@ -148,11 +160,9 @@ static EFI_STATUS pil_finish(struct pil *pil)
  			continue;
  
  		status = fw_load(&pil->fw[c]);
@@ -359,7 +482,7 @@ index 1a7d7d4..9cc3fe3 100644
  	}
  
  	/* Stop lite firmware in reverse order (full first, then DTB) */
-@@ -161,7 +161,8 @@ static EFI_STATUS pil_finish(struct pil *pil)
+@@ -161,7 +171,8 @@ static EFI_STATUS pil_finish(struct pil *pil)
  			continue;
  
  		/* Ignore return status since we don't know if lite was running */
@@ -369,7 +492,7 @@ index 1a7d7d4..9cc3fe3 100644
  	}
  
  	for (enum pil_component c = 0; c < PIL_COMPONENTS; c++) {
-@@ -169,10 +170,8 @@ static EFI_STATUS pil_finish(struct pil *pil)
+@@ -169,10 +180,8 @@ static EFI_STATUS pil_finish(struct pil *pil)
  			continue;
  
  		status = scm_pil_start(pil->type->id[c].full);
@@ -381,7 +504,7 @@ index 1a7d7d4..9cc3fe3 100644
  			/* Rollback */
  			for (enum pil_component b = c; b > 0; b--)
  				if (pil_has_component(pil, b - 1))
-@@ -182,6 +181,8 @@ static EFI_STATUS pil_finish(struct pil *pil)
+@@ -182,6 +191,8 @@ static EFI_STATUS pil_finish(struct pil *pil)
  		}
  	}
  
@@ -391,7 +514,7 @@ index 1a7d7d4..9cc3fe3 100644
  }
  
 diff --git a/src/qebspil.h b/src/qebspil.h
-index 17265d6..9797bf0 100644
+index 17265d6..c12d77e 100644
 --- a/src/qebspil.h
 +++ b/src/qebspil.h
 @@ -38,6 +38,11 @@ struct pil {
@@ -400,9 +523,17 @@ index 17265d6..9797bf0 100644
  
 +void qebspil_log(const char *line);
 +void qebspil_logf(const char *fmt, ...);
-+void qebspil_log_persist(void);
++EFI_STATUS qebspil_log_persist(void);
 +void qebspil_log_enter_ebs(void);
 +
  EFI_STATUS dtb_enumerate_rprocs(const void *dtb);
  
  typedef EFI_STATUS (*event_callback_fn)(void);
+@@ -56,6 +61,7 @@ static inline BOOLEAN pil_has_component(const struct pil *pil, enum pil_componen
+ }
+ 
+ struct pil *pil_alloc(const struct pil_type *type);
++UINTN pil_count(void);
+ EFI_STATUS pil_prepare(struct pil *pil);
+ EFI_STATUS pil_finish_all(void);
+ void pil_free(struct pil *pil);

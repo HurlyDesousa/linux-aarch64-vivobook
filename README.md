@@ -244,10 +244,26 @@ attach-to-lite; Dummy. Late EBS **ran**; DTB left up; main never
 left up. Insyde TPL is **not** totally dead. NS `-22` on the DTB
 ELF is expected after tearing down UEFI 0x24. Preferred: main
 `scm_pil_init` failed (no DTB rollback); AUTH-fail of main would
-have dropped 0x24. **HOLD** `attach_running_main`. Next: copy
-[qebspil/qebspilaa64.efi](qebspil/qebspilaa64.efi) over the live
-ALWAYS_START efi (ebs-efivar-fixed 4 KiB NV slot; paste
-`QebspilAdsp` only). No ConOut photo.
+have dropped 0x24. **HOLD** `attach_running_main`.
+
+**7.2.2-11 acca195 USB-swap collect** (pkgrel 11 held): banner
+`ebs-efivar-fixed build` **OK** (load-time 4 KiB NV write works).
+Still **no** `late-EBS enter` / **no** `[MAIN] stage=` (rest
+NUL-padded). That boot: Toby Limine **keymap-only unlock —
+skipped dtbloader** → Linux `PAS shutdown dtb 0x24: -22`. That
+PAS line is **invalid for AUTH comparison**; prior good boots
+needed dtbloader→qebspil for `0x24: 0`.
+
+**Root cause (upstream `efi_dtb_changed`):** `efi_late_ebs` is
+registered **only after** `EfiDtbTableGuid` + at least one
+prepared remoteproc. No GUID / remotecount=0 → callback **never
+registered** → `pil_finish_all` **never runs** → SetVariable at
+EBS is never attempted. qebspil still loaded (banner). Next
+binary **always** registers late-EBS and always writes
+`late-EBS enter remotecount=N`. **HOLD** `attach_running_main`.
+Copy [qebspil/qebspilaa64.efi](qebspil/qebspilaa64.efi) over the
+live efi (`ebs-always-register`; paste `QebspilAdsp` only). No
+ConOut photo.
 
 See [docs/adsp-22.md](docs/adsp-22.md) and the operator recipe
 [docs/qebspil-dtbloader.md](docs/qebspil-dtbloader.md)
@@ -259,7 +275,7 @@ Patches live at repo root as
 `0006-x1e-adsp-attach-running-main.patch` (makepkg `source=()`
 basenames; copies under `patches/` are optional).
 
-After reboot into `7.2.2-11-aarch64-vivobook`:
+After next full dtbloader→qebspil boot into `7.2.2-11-aarch64-vivobook`:
 
 ```
 dmesg | grep -E 'PAS shutdown|initializing firmware|attaching to|reusing UEFI|attach_running_main'
@@ -270,9 +286,11 @@ aplay -l
 
 Daily boot: no extra flags (attach-to-lite). dtbloader then
 ALWAYS_START qebspil is already staged. No-reuse dump: `0x24: 0`,
-`0x1: -22`. Next is copy
+`0x1: -22`. Keymap-only unlock **without dtbloader** is invalid
+for 0x24 AUTH (`0x24: -22` on that path). Next is copy
 [qebspil/qebspilaa64.efi](qebspil/qebspilaa64.efi) onto the live
-stick (INIT vs AUTH in efivar `QebspilAdsp`, `dd … skip=4`) — not
+stick (`ebs-always-register`: register status + `late-EBS enter
+remotecount=N`; MAIN INIT vs AUTH only when remotecount>0) — not
 `attach_running_main`, not the USB log. After EBS AUTH of 0x1 only:
 Limine cmdline `qcom_q6v5_pas.attach_running_main=1`.
 
