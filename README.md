@@ -142,6 +142,22 @@ See `0003-x1e80100-vivobook-camera-phase-a.patch` for the full DTS.
 See `config.vivobook`. The PKGBUILD starts from ALARM's full `config` and
 merges this fragment.
 
+## Sound DTS (pkgrel 12)
+
+7.2 / mainline Vivobook DT has SoundWire + WSA/TX/RX macros under `soc`
+but **no** top-level `/sound`. `0007-x1e80100-vivobook-sound-dts.patch`
+ports Elliot Huang’s tested S15 graph (LKML Jun 2025) onto
+`x1-asus-vivobook-s15.dtsi` so ALSA can eventually bind.
+
+This is **not** a PAS -22 fix and **not** a Yoga Slim 7x 4-speaker copy.
+AudioReach topology (`linux-msm/audioreach-topology` PR #22,
+`X1E80100-ASUS-Vivobook-S15`) and UCM are still required after DTS.
+Full ADSP (TZ-accepted DTB / AUTH of PAS 0x24 then 0x1) is a
+**parallel** track; today those ids are still -22 / attach-to-lite.
+
+**HOLD install / no Omarchy reboot ask.** See
+[docs/sound-dts.md](docs/sound-dts.md).
+
 ## ADSP -22
 
 Not a DTS carveout mismatch. The ELF and the 7.2 DTS already agree:
@@ -274,8 +290,9 @@ See [docs/adsp-22.md](docs/adsp-22.md) and the operator recipe
 Patches live at repo root as
 `0001-x1e-adsp-dtb-init-after-power.patch`,
 `0002-qcom-battmgr-capacity-from-energy.patch`,
-`0005-x1e-adsp-reuse-authenticated-dtb.patch`, and
-`0006-x1e-adsp-attach-running-main.patch` (makepkg `source=()`
+`0005-x1e-adsp-reuse-authenticated-dtb.patch`,
+`0006-x1e-adsp-attach-running-main.patch`, and
+`0007-x1e80100-vivobook-sound-dts.patch` (makepkg `source=()`
 basenames; copies under `patches/` are optional).
 
 Daily boot: no extra flags (attach-to-lite). dtbloader then

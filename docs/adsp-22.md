@@ -793,7 +793,9 @@ later audio/GLINK problem, not another PAS_INIT of the OEM MBN.
 - Do **not** treat Found-remoteproc, attach-to-lite, or
   REUSE_PARTIAL as a TZ signature fix or as AUTH of 0x1.
 - Do **not** add Vivobook sound-card / WSA DTS as the next PAS -22
-  step. `CONFIG_RESET_GPIO=y` is already on.
+  step. `CONFIG_RESET_GPIO=y` is already on. Board `/sound` is a
+  **parallel** track (`0007`, [sound-dts.md](sound-dts.md), pkgrel 12);
+  it does not AUTH 0x24/0x1.
 - Do **not** claim another NS `PAS_INIT` kernel tweak publishes
   `EfiDtbTableGuid` or AUTHs 0x1. Do **not** bump pkgrel.
 - Do **not** fork Limine or patch qebspil TPL / Stall. The
