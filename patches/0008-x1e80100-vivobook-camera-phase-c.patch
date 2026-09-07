@@ -33,7 +33,9 @@ If chip-id is not 0x5602 / HID is OVTI08X40, switch compatible
 to ovti,ov08x40 and 4-lane (same 0x36 -- not both).
 
 VERIFY order: dmesg sensor probe (power + chip-id) -> then
-i2cdetect ACK/UU on i2c-8 -> then v4l preview.
+i2cdetect ACK/UU on i2c-8 -> then media-ctl pipeline on the
+already-present /dev/video* (do not treat ls /dev/video* as
+success).
 
 Signed-off-by: Grokbot <grokbot@s-w.art>
 --- a/arch/arm64/boot/dts/qcom/x1-asus-vivobook-s15.dtsi
@@ -96,7 +98,7 @@ Signed-off-by: Grokbot <grokbot@s-w.art>
  };
  
  &gpu {
-@@ -1356,29 +1400,49 @@
+@@ -1356,29 +1400,53 @@
  };
  
  /*
@@ -110,9 +112,13 @@ Signed-off-by: Grokbot <grokbot@s-w.art>
 - *   vreg_l3e_1p2 = ldo3 of pmc8380_e  (1.2 V)       -> 1.2V CSIPHY rail
 - * Must verify against ASUS BSP schematic before Phase C (sensor enable).
 - * Safe for Phase A: CSIPHY regulators only asserted during streaming.
-+ * Live 7.2.2-12: CAMSS bound; CCI0=i2c-5/6 CCI1=i2c-7/8; i2cdetect
-+ * 5..8 ALL EMPTY (CCI queue timeouts). ov02c10.ko unmatched. Empty
-+ * scan means unpowered, not "wrong address". Do not reinvent CAMSS/CCI.
++ * Live CAMSS already provides /dev/video0-15 and /dev/media0. This
++ * overlay binds the sensor + csiphy4 endpoint so the media pipeline
++ * can use those nodes -- it does not create video devices.
++ *
++ * Live 7.2.2-12: CCI0=i2c-5/6 CCI1=i2c-7/8; i2cdetect 5..8 ALL EMPTY
++ * (CCI queue timeouts). ov02c10.ko unmatched. Empty scan means
++ * unpowered, not "wrong address". Do not reinvent CAMSS/CCI.
   *
 - * CCI1 is enabled (OV02C10 front camera expected on CCI1 i2c1 @ 0x36 --
 - * this is a HUNCH, pending post-boot i2cdetect once CCI adapters appear).
@@ -161,7 +167,7 @@ Signed-off-by: Grokbot <grokbot@s-w.art>
  };
  
  &cci0 {
-@@ -1396,3 +1460,52 @@
+@@ -1396,3 +1464,52 @@
  
  	status = "okay";
  };

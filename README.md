@@ -10,17 +10,22 @@ and does not Conflict the stock kernel.
 
 ## Camera — Phase C (pkgrel 13)
 
-Live **7.2.2-12** already has CAMSS + CCI (video0–15, i2c-5..8, no
-sensor OF node, `ov02c10.ko` unmatched). `i2cdetect -y 5..8` is
-**all empty** with CCI queue timeouts. That means the sensor is
-**unpowered**, not that 0x36 is wrong. USB 1.2/1.8 V rails are
-already on, so those are the wrong supplies.
+Live Omarchy already has CAMSS: `/dev/video0`–`video15` and
+`/dev/media0` **exist**. Phase C does **not** create those nodes.
+It binds the sensor and the media pipeline (sensor → csiphy4 →
+csid → vfe rdi → an existing video node) so preview can work.
+
+`i2cdetect -y 5..8` is **all empty** with CCI queue timeouts. That
+means the sensor is **unpowered**, not that 0x36 is wrong. USB
+1.2/1.8 V rails are already on, so those are the wrong supplies.
 
 `0008-x1e80100-vivobook-camera-phase-c.patch` adds the OV02C10 node
 on **CCI1 i2c1 (live i2c-8)**, pm8010 RGB rails, reset/MCLK, and the
 v7.2 CAMSS `port@3` (csiphy4) link. Does not rewrite 0003/0004.
+Keyboard/touchpad and `omarchy-hw-laptop` ACPI lid are out of scope.
 
-Install / VERIFY (probe **before** i2cdetect):
+Install / VERIFY (dmesg probe → i2cdetect ACK → media-ctl, **not**
+`ls /dev/video*`):
 [docs/camera-phase-c.md](docs/camera-phase-c.md).
 
 ---
@@ -140,7 +145,8 @@ ls /sys/class/i2c-adapter/          # new i2c-N entries for CCI0 and CCI1
 dmesg | grep -E 'cci|camss|csiphy|qcom-camss'
 # Phase B: once CCI adapters are confirmed:
 i2cdetect -y <N>                    # look for 0x36 on the CCI1 i2c1 bus
-ls /dev/video*                      # will be empty until Phase C sensor bind
+# /dev/video0-15 already exist from CAMSS; Phase C is sensor bind, not
+# creating those nodes.
 ```
 
 See `0003-x1e80100-vivobook-camera-phase-a.patch` for the full DTS.
