@@ -8,21 +8,24 @@ This is **not** the omarchy-iso fork. Native-build on the laptop (X Elite).
 Dual-boots with stock `linux-aarch64`: this package does not Provide `linux`
 and does not Conflict the stock kernel.
 
-## Camera — Phase C (pkgrel 14)
+## Camera — Phase C (pkgrel 15) — HOLD install
 
 Live Omarchy already has CAMSS: `/dev/video0`–`video15` and
 `/dev/media0` **exist**. Phase C does **not** create those nodes.
 
-**7.2.2-13 live:** OF bind `ov02c10 8-0036` is correct (CCI1 i2c1 @
-0x36). Chip-id `0x300a` returns `-110`. rpmh **SET** `l2m`/`l4m`/`l7m`
-then probe `power_off` leaves them disabled — that is expected, not
-a pm8010-m no-op. No gpio/MCLK dmesg is expected on the success path
-of those gets.
+**7.2.2-14 live:** OF bind `ov02c10 8-0036` is correct. Chip-id
+`0x300a` still `-110`. `l2m`/`l4m`/`l7m` `num_users=0` after fail
+is power_off unwind, not a driver skip — those LDOs are **CAMI
+(IR)**, not CAMF. S5507QA AeoB CAMF votes `LDO7_B` @ 2.8 V +
+`LDO3_M` @ 1.8 V (same as Zenbook A14). SCFG_FRONT is `ov02c10`
+chip-id `0x5602`.
 
-`0009` adds 10 ms rail settle (`startup-delay-us`) and unused
-`l1m`/`l3m` for a later supply swap. No `regulator-always-on`.
-Does not rewrite 0003/0004. Keyboard/touchpad and ACPI lid stay
+`0010` wires `avdd`+`dvdd` to `vreg_l7b_2p8` and `dovdd` to
+`vreg_l3m_1p8`. No `regulator-always-on`. No driver rewrite
+(supply names already match). Keyboard/touchpad and ACPI lid stay
 out of scope.
+
+**HOLD** `pacman -U` until greenlight.
 
 Install / VERIFY:
 [docs/camera-phase-c.md](docs/camera-phase-c.md).
@@ -122,20 +125,18 @@ No sensor node is wired yet; that is Phase C after CCI is confirmed.
 
 ### What Phase C did / still HUNCH
 
-Phase C (pkgrel 14, `0008`+`0009`) adds the sensor node + pm8010 RGB rails
-and a 10 ms enable settle after the 7.2.2-13 chip-id `-110`.
-Remaining hunches (live confirm after install):
+Phase C (pkgrel 15, `0008`+`0009`+`0010`) adds the sensor node and
+wires AeoB CAMF rails (`l7b` + `l3m`) after 7.2.2-13/14 chip-id
+`-110` on the T14s `l2m`/`l4m`/`l7m` copy.
 
-- **Address / bus**: OV02C10 @ CCI1 i2c1 0x36 == live i2c-8. Empty
-  pre-Phase-C `i2cdetect` does not refute this.
-- **pm8010**: RPMh pmic-id `m`. If probe fails on regulators, this
-  PMIC is missing or the id is wrong.
+- **Address / bus**: OV02C10 @ CCI1 i2c1 0x36 == live i2c-8.
+- **CAMF rails**: AeoB `LDO7_B` + `LDO3_M`. `l4m`/`l7m` are CAMI.
+- **Sensor**: SCFG_FRONT_QRD is `ov02c10` / chip-id `0x5602`.
 - **CSIPHY supplies**: still Phase A guesses (`vreg_l1d_0p8` /
   `vreg_l3e_1p2`).
 - **PHY API**: upstream v13 CSIPHY series will replace embedded
   CSIPHY; follow-up once merged.
-- **ACPI HID**: OVTI02C1 vs OVTI08X40 still unconfirmed; `0008`
-  binds OV02C10 and ships `CONFIG_VIDEO_OV08X40=m` for a swap.
+- **ACPI HID**: Windows `QCOM0C06` (Spectra), not `OVTI02C1`.
 
 ### Post-boot checks
 

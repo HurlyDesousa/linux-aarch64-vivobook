@@ -1,4 +1,4 @@
-# Camera Phase C — sensor bind + media pipeline (pkgrel 14)
+# Camera Phase C — sensor bind + media pipeline (pkgrel 15)
 
 Phase A/B already bring up CAMCC, CCI, and CAMSS. Phase C does **not**
 create `/dev/video*` — those nodes already exist.
@@ -6,77 +6,91 @@ create `/dev/video*` — those nodes already exist.
 Out of scope: keyboard/touchpad; `omarchy-hw-laptop` ACPI lid;
 speakers/PAS/qebspil/ADSP; Lenovo/Yoga sensor-node copies.
 
-## Live 7.2.2-13 FAIL (this is the current problem)
+**HOLD install** until greenlight. Do not `pacman -U` 7.2.2-15 yet.
 
-OF bind works. Chip-id does not.
+## Live 7.2.2-14 FAIL
+
+OF bind works. Chip-id does not. Rails that matter were never in the
+consumer list.
 
 ```
 ov02c10 8-0036: Error reading reg 0x300a: -110
 ov02c10 8-0036: failed to find sensor: -110
-ov02c10 8-0036: probe with driver ov02c10 failed with error -110
 ```
 
-During that probe:
+`i2cdetect -y 8` empty (CCI master 1 queue 0 timeout). CAMSS
+video0–15 still up. DT path `cci@ac16000/i2c-bus@1/camera@36` binds.
 
-```
-vreg_l2m_1p2: Setting 1200000-1256000uV
-vreg_l4m_1p8: Setting 1800000-1800000uV
-vreg_l7m_2p8: Setting 2800000-2800000uV
-```
+After fail: `vreg_l2m_1p2` / `vreg_l4m_1p8` / `vreg_l7m_2p8` are
+`state=disabled`, `num_users=0`. That sysfs snapshot **cannot** prove
+the driver skipped `regulator_bulk_enable` — 7.2 `ov02c10_probe()`
+calls `ov02c10_power_on()` (MCLK + `bulk_enable(dovdd,avdd,dvdd)` +
+reset) **before** the 0x300a read, then `ov02c10_power_off()` +
+`devm` unwind on identify fail. Supply names already match DT.
 
-After fail: those three regulators are **present but disabled**
-(`num_users=0`). i2c client `8-0036` stays registered; OF path
-`cci@ac16000/i2c-bus@1/camera@36`; `waiting_for_supplier=0`.
-`i2cdetect` 5–8 still all `--`. `media-ctl` has no ov02 entity.
-No gpio237 / gpio100 / MCLK / pm8010 strings in dmesg besides the
-three vreg SET lines.
+What it **does** prove: those three LDOs are not the CAMF pins.
+S5507QA AeoB never votes them for the front RGB module.
 
-### What that means
+## AeoB evidence (this is the 0010 change)
 
-| Observation | Meaning |
-|-------------|---------|
-| `ov02c10 8-0036` probed | **Bus/addr confirmed** — CCI1 i2c1 @ 0x36 == live i2c-8 |
-| Voltage SET on l2m/l4m/l7m | **pm8010-m is in CMD-DB** (`ldom2/4/7`). Not a silent miss. |
-| vregs disabled after fail | **Expected** — `ov02c10_identify_module()` fails → `ov02c10_power_off()` drops rails + MCLK + asserts reset. Not a no-op enable. |
-| No gpio/MCLK dmesg | **Expected** unless get/enable fails. Clock get succeeded (else `failed to get imaging clock`). Reset is optional and silent. |
-| chip-id `-110` + empty i2cdetect | CCI no-ACK. Sensor still not electrically ready **or** those LDOs are not the physical rails **or** reset/MCLK pin is wrong. Not an OV08X40 chip-id mismatch (that would be `-ENXIO` after an ACK). |
+[`CAMF_RES_QRD.json`](https://github.com/alexVinarskis/qcom-aeob-dumps/blob/master/asus-vivobook-s15-s5507/CAMF_RES_QRD.json)
+(identical to Zenbook A14 CAMF):
+
+| Resource | Value | DT |
+|----------|-------|----|
+| `PPP_RESOURCE_ID_LDO7_B` | `0x2AB980` = 2.801 V | `vreg_l7b_2p8` (pm8550-b ldo7) |
+| `PPP_RESOURCE_ID_LDO3_M` | `0x1B7740` = 1.800 V | `vreg_l3m_1p8` (pm8010-m ldo3) |
+| `cam_cc_mclk4_clk` | 19.2 MHz | `CAM_CC_MCLK4_CLK` / gpio100 `cam_aon` |
+| TLMMGPIO `0xED` | reset assert → rails → MCLK → deassert | `tlmm 237` ACTIVE_LOW |
+| [`SCFG_FRONT_QRD`](https://github.com/alexVinarskis/qcom-aeob-dumps/blob/master/asus-vivobook-s15-s5507/SCFG_FRONT_QRD.json) | `ov02c10.bin`, id `0x5602300A` | `ovti,ov02c10`, chip-id `0x5602` |
+
+[`CAMI_RES_QRD.json`](https://github.com/alexVinarskis/qcom-aeob-dumps/blob/master/asus-vivobook-s15-s5507/CAMI_RES_QRD.json)
+(IR) votes `LDO4_M` + `LDO7_M`. The T14s RGB map `l7m`/`l2m`/`l4m`
+copied the **IR** PMIC, not CAMF. Yoga Slim 7x had the same `-110`
+on that T14s copy and moved RGB off those rails.
 
 `ov02c10_power_on()` order (do **not** rewrite the driver):
 
 1. `clk_prepare_enable` (MCLK)
-2. `regulator_bulk_enable` (dovdd, avdd, dvdd)
-3. reset assert 2 ms, deassert, wait 5 ms
+2. `regulator_bulk_enable` (dovdd, avdd, dvdd) — both avdd and dvdd
+   now point at `l7b` (same as Zenbook A14)
+3. reset already asserted (`GPIOD_OUT_HIGH` + ACTIVE_LOW); 2 ms;
+   deassert; wait 5 ms (AeoB CAMF delay is 5 ms)
 4. CCI read `0x300a`
 
 `regulator-always-on` / `regulator-boot-on` would only hide this
 sequence. Not used.
 
-## What 0008 + 0009 add
+## What 0008 + 0009 + 0010 add
 
 `0008` — sensor OF node, pm8010-m rails, reset/MCLK, CAMSS `port@3`.
 
-`0009` (pkgrel 14) — power-on settle only:
+`0009` (pkgrel 14) — 10 ms settle on the **wrong** T14s LDOs; unused
+`l1m`/`l3m`. Did not fix chip-id.
 
-- `startup-delay-us` / `regulator-enable-ramp-delay` = 10 ms on the
-  **wired** LDOs so `bulk_enable` returns after a settle window
-  (driver only waits 5 ms after reset).
-- Unused `vreg_l1m_1p2` / `vreg_l3m_1p8` declared for a one-line
-  supply swap if l2m/l4m are the wrong physical rails.
-- Still **no** OV08X40 node (same 0x36). Swap `compatible` only.
+`0010` (pkgrel 15) — AeoB CAMF wiring:
+
+- Add `vreg_l7b_2p8` on existing `regulators-0` (pm8550-b; parent
+  `vdd-l6-l7-supply` is already `bob2`)
+- `avdd-supply` + `dvdd-supply` = `<&vreg_l7b_2p8>`
+- `dovdd-supply` = `<&vreg_l3m_1p8>` (was declared unused)
+- Leave `l2m`/`l4m`/`l7m` declared but **unwired** (CAMI leftovers)
+- Still **no** OV08X40 node (same 0x36). SCFG says ov02c10.
 
 | Item | Value | Evidence |
 |------|--------|----------|
 | Bus / addr | `&cci1_i2c1` `camera@36` → **i2c-8** | live OF bind `8-0036` |
-| Compat | `ovti,ov02c10` | FHD+IR spec; `-110` is no-ACK |
-| Reset | `tlmm 237` ACTIVE_LOW | SoC ref-design; unused on this board |
-| MCLK | `CAM_CC_MCLK4` @ 19.2 MHz, `gpio100` `cam_aon` | x1e80100 pinctrl; CRD names this CAM_RESET_N / MCLK on those pins |
-| AVDD / DVDD / DOVDD | `l7m` 2.8 / `l2m` 1.2 / `l4m` 1.8 | CMD-DB accepted SET on 7.2.2-13 |
-| Alt (declared, unused) | `l1m` 1.2 / `l3m` 1.8 | if still `-110` after settle |
-| Windows ACPI | `QCOM0C06` Spectra front sensor | not `OVTI02C1`; no public S5507QA camera DTS |
+| Compat | `ovti,ov02c10` | SCFG_FRONT_QRD `ov02c10.bin` / `0x5602` |
+| Reset | `tlmm 237` ACTIVE_LOW | AeoB GPIO `0xED` |
+| MCLK | `CAM_CC_MCLK4` @ 19.2 MHz, `gpio100` `cam_aon` | AeoB `cam_cc_mclk4_clk` |
+| AVDD / DVDD | `l7b` 2.8 V (shared) | AeoB `LDO7_B` |
+| DOVDD | `l3m` 1.8 V | AeoB `LDO3_M` |
+| Not CAMF | `l2m` / `l4m` / `l7m` | AeoB CAMI; live 13/14 `-110` |
+| Windows ACPI | `QCOM0C06` Spectra front sensor | not `OVTI02C1` |
 
-No public Vivobook camera DTS. Do not copy Lenovo sensor wiring.
+## Omarchy install (HOLD)
 
-## Omarchy install
+Do **not** install until greenlight. When unblocked:
 
 ```bash
 sudo pacman -S --needed base-devel xmlto docbook-xsl kmod inetutils bc git dtc python pahole \
@@ -85,41 +99,44 @@ git clone -b cursor/vivobook-camera-phase-c-977f \
     https://github.com/HurlyDesousa/linux-aarch64-vivobook.git
 cd linux-aarch64-vivobook
 makepkg -s
-sudo pacman -U linux-aarch64-vivobook-7.2.2-14-*.pkg.tar.* \
-              linux-aarch64-vivobook-headers-7.2.2-14-*.pkg.tar.*
+sudo pacman -U linux-aarch64-vivobook-7.2.2-15-*.pkg.tar.* \
+              linux-aarch64-vivobook-headers-7.2.2-15-*.pkg.tar.*
 sudo limine-update
 sudo reboot
 ```
 
-Select `7.2.2-14-aarch64-vivobook` (uname `7.2.0-14-…-ARCH`).
+Select `7.2.2-15-aarch64-vivobook` (uname `7.2.0-15-…-ARCH`).
 Does not replace stock `linux-aarch64`.
 
 ## VERIFY (order matters)
 
-`ls /dev/video*` is **not** success. After 0009 the **first** question
-is: does chip-id still `-110` after the 10 ms rail settle?
+`ls /dev/video*` is **not** success. After 0010 the **first** question
+is: does chip-id become `0x5602` now that CAMF rails are `l7b`+`l3m`?
 
 ### 1) dmesg — sensor probe
 
 ```bash
 uname -r
-# expect 7.2.0-14-aarch64-vivobook
+# expect 7.2.0-15-aarch64-vivobook
 
-dmesg | rg 'ov02c10|ov08x40|cci|camss|pm8010|rpmh|vreg_l|MCLK|gpio237|ldom'
-# or: dmesg | grep -E 'ov02c10|ov08x40|cci|camss|pm8010|rpmh|vreg_l|MCLK|gpio237|ldom'
+dmesg | rg 'ov02c10|ov08x40|cci|camss|pm8010|rpmh|vreg_l7b|vreg_l3m|vreg_l2m|vreg_l4m|vreg_l7m|MCLK|gpio237|ldom'
+# or: dmesg | grep -E 'ov02c10|ov08x40|cci|camss|pm8010|rpmh|vreg_l7b|vreg_l3m|vreg_l2m|vreg_l4m|vreg_l7m|MCLK|gpio237|ldom'
 
 # success: chip id 0x5602, no "failed to find sensor"
-# 7.2.2-13 fail (still possible): "Error reading reg 0x300a: -110"
-#   then vregs disabled = power_off cleanup, not a new bug
+# still-fail: "Error reading reg 0x300a: -110"
 ```
+
+During probe, expect rpmh **SET** on `vreg_l7b_2p8` and `vreg_l3m_1p8`.
+`l2m`/`l4m`/`l7m` staying unused is now **correct** (not CAMF).
 
 Capture next if still `-110`:
 
 ```bash
-# rails after failed probe (expect disabled; that is power_off)
+# CAMF rails after probe (success: enabled + users>=1 while bound;
+# fail: disabled users=0 is power_off, look at dmesg SET instead)
 for r in /sys/class/regulator/regulator.*/name; do
   n=$(cat "$r")
-  case $n in vreg_l*m_*|vreg_l2m*|vreg_l4m*|vreg_l7m*|vreg_l1m*|vreg_l3m*)
+  case $n in vreg_l7b*|vreg_l3m*|vreg_l2m*|vreg_l4m*|vreg_l7m*|vreg_l1m*)
     d=$(dirname "$r")
     echo "$n $(cat $d/microvolts 2>/dev/null) $(cat $d/state 2>/dev/null) users=$(cat $d/num_users 2>/dev/null)"
   esac
@@ -133,7 +150,7 @@ cat /sys/kernel/debug/clk/cam_cc_mclk4_clk/clk_rate 2>/dev/null
 grep -n 237 /sys/kernel/debug/gpio 2>/dev/null
 
 # rpmh / cmd-db
-dmesg | rg 'ldom|rpmh-regulator|could not find RPMh'
+dmesg | rg 'ldom|rpmh-regulator|could not find RPMh|ldo7'
 ```
 
 ### 2) i2cdetect — only after a successful chip-id
@@ -150,16 +167,18 @@ media-ctl -p -d /dev/media0 | grep -E 'ov02c10|csiphy|csid|vfe'
 # then SGRBG10 1928x1092, csiphy4 -> csid0 -> vfe0_rdi0, capture that videoN
 ```
 
-## If 14 still `-110`
+## If 15 still `-110`
 
-| Next swap | How |
-|-----------|-----|
-| Wrong physical LDOs | Point `dvdd-supply` at `<&vreg_l1m_1p2>` and `dovdd-supply` at `<&vreg_l3m_1p8>` (already in DTS, unused) |
-| Reset polarity | Try `GPIO_ACTIVE_HIGH` on gpio237 |
-| Reset pin | Need ACPI/BSP GPIO (Windows HID `QCOM0C06`); no public dump yet |
-| MCLK pin | Need ACPI/BSP; SoC ref is gpio100 `cam_aon` / MCLK4 |
-| OV08X40 | Only if a future chip-id ACK returns not `0x5602`. Change `compatible` + 4-lane; do not add a second `@36` |
+Driver already enables `avdd`/`dvdd`/`dovdd` before CCI. Next is not
+another T14s LDO guess.
+
+| Next | How |
+|------|-----|
+| Confirm l7b/l3m SET in dmesg | If no SET on those two, rpmh rejected ldo7-b or l3m |
+| Reset still wrong | AeoB is gpio237; try `GPIO_ACTIVE_HIGH` only if SET happened |
+| MCLK pin | AeoB votes `cam_cc_mclk4_clk`; SoC pad is gpio100 `cam_aon` |
+| OV08X40 | Only if a future chip-id ACK returns not `0x5602`. SCFG says no |
 | `regulator-always-on` | Last resort only, to see whether rails dropping mid-CCI is real |
 
-Paste the `dmesg \| rg` + regulator + clk + gpio237 captures before the
-next DTS guess.
+Paste the `dmesg \| rg` + `l7b`/`l3m` regulator + `cam_cc_mclk4_clk` +
+`gpio 237` captures before the next DTS guess.
