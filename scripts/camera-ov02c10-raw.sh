@@ -66,15 +66,22 @@ find_sensor_entity() {
   echo "$name"
 }
 
+fmt_available() {
+  local video="$1" fmt="$2"
+  # v4l2-ctl --list-formats-ext prints e.g. [10]: 'pgAA' (10-bit Bayer …)
+  v4l2-ctl -d "$video" --list-formats-ext 2>/dev/null \
+    | rg -q "['\"]${fmt}['\"]"
+}
+
 pick_pixfmt() {
   local video="$1" want="$2" fmt
-  if v4l2-ctl -d "$video" --list-formats-ext 2>/dev/null | rg -q "^\s*${want}\s"; then
+  if fmt_available "$video" "$want"; then
     echo "$want"
     return
   fi
   # pkgrel 15 live /dev/video0 advertises pgAA (10-bit GRBG packed) first.
   for fmt in pgAA pGAA pRAA BG10 GRBG BA81 RG10 SGRBG10 SGRBG10P BA10 SGRBG8; do
-    if v4l2-ctl -d "$video" --list-formats-ext 2>/dev/null | rg -q "^\s*${fmt}\s"; then
+    if fmt_available "$video" "$fmt"; then
       log "PIXFMT=$want unavailable on $video; using $fmt"
       echo "$fmt"
       return

@@ -130,8 +130,9 @@ If `msm_csid0` fails, repeat the last two `-l` lines with `msm_csid1` …
 
 ```bash
 v4l2-ctl -d "$VIDEO" --list-formats-ext
+# lines look like: [10]: 'pgAA' (10-bit Bayer GRGR/BGBG Packed)
 v4l2-ctl -d "$VIDEO" --set-fmt-video=width=1928,height=1092,pixelformat=pgAA
-# live video0: pgAA (10-bit GRBG packed), pRAA, BG10, GRBG, BA81, …
+# live video0: pgAA, pRAA, BG10, GRBG, BA81, … (script matches quoted fourcc)
 
 OUT=/tmp/ov02c10.raw
 rm -f "$OUT"
