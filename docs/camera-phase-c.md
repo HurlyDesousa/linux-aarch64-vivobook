@@ -162,19 +162,20 @@ i2cdetect -y 5; i2cdetect -y 6; i2cdetect -y 7
 
 ### 3) media pipeline + raw capture — only after the entity exists
 
-Naive `v4l2-ctl --stream-mmap` on a random `/dev/videoN` returns **0 bytes**
-until `media-ctl` links and formats sensor → csiphy4 → csid0 → vfe0_rdi0.
+Naive `v4l2-ctl` on `/dev/video0` returns **0 bytes** until `media-ctl` sets
+**`SGRBG10_1X10/1928x1092`** on CSIPHY/CSID/RDI (CSIPHY defaults to wrong
+`UYVY8/1920x1080`) and enables **`msm_csiphy4`:1 → `msm_csidN` →
+`msm_vfe0_rdi0`**. Sensor→CSIPHY is already **`[ENABLED,IMMUTABLE]`** on
+pkgrel 15 live (`/dev/media0` only).
 
-Full recipe (topology, formats, triage, Omarchy VERIFY block):
-**[camera-phase-c-preview.md](camera-phase-c-preview.md)**.
+Full recipe: **[camera-phase-c-preview.md](camera-phase-c-preview.md)**.
 
 Quick check:
 
 ```bash
-MEDIA=$(for m in /dev/media*; do media-ctl -d "$m" -p 2>/dev/null | rg -q ov02c10 && echo "$m" && break; done)
-media-ctl -d "$MEDIA" -p | rg 'ov02c10|csiphy4|csid0|vfe0_rdi0'
-./scripts/camera-ov02c10-raw.sh   # or follow preview doc §5–§6 manually
-ls -l /tmp/ov02c10.raw            # success: non-zero size
+media-ctl -d /dev/media0 -p | rg 'ov02c10|csiphy4|csid|vfe0_rdi0|video0'
+./scripts/camera-ov02c10-raw.sh
+ls -l /tmp/ov02c10.raw
 ```
 
 ## If 15 still `-110`
