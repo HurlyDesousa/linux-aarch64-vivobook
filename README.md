@@ -8,24 +8,23 @@ This is **not** the omarchy-iso fork. Native-build on the laptop (X Elite).
 Dual-boots with stock `linux-aarch64`: this package does not Provide `linux`
 and does not Conflict the stock kernel.
 
-## Camera — Phase C (pkgrel 13)
+## Camera — Phase C (pkgrel 14)
 
 Live Omarchy already has CAMSS: `/dev/video0`–`video15` and
 `/dev/media0` **exist**. Phase C does **not** create those nodes.
-It binds the sensor and the media pipeline (sensor → csiphy4 →
-csid → vfe rdi → an existing video node) so preview can work.
 
-`i2cdetect -y 5..8` is **all empty** with CCI queue timeouts. That
-means the sensor is **unpowered**, not that 0x36 is wrong. USB
-1.2/1.8 V rails are already on, so those are the wrong supplies.
+**7.2.2-13 live:** OF bind `ov02c10 8-0036` is correct (CCI1 i2c1 @
+0x36). Chip-id `0x300a` returns `-110`. rpmh **SET** `l2m`/`l4m`/`l7m`
+then probe `power_off` leaves them disabled — that is expected, not
+a pm8010-m no-op. No gpio/MCLK dmesg is expected on the success path
+of those gets.
 
-`0008-x1e80100-vivobook-camera-phase-c.patch` adds the OV02C10 node
-on **CCI1 i2c1 (live i2c-8)**, pm8010 RGB rails, reset/MCLK, and the
-v7.2 CAMSS `port@3` (csiphy4) link. Does not rewrite 0003/0004.
-Keyboard/touchpad and `omarchy-hw-laptop` ACPI lid are out of scope.
+`0009` adds 10 ms rail settle (`startup-delay-us`) and unused
+`l1m`/`l3m` for a later supply swap. No `regulator-always-on`.
+Does not rewrite 0003/0004. Keyboard/touchpad and ACPI lid stay
+out of scope.
 
-Install / VERIFY (dmesg probe → i2cdetect ACK → media-ctl, **not**
-`ls /dev/video*`):
+Install / VERIFY:
 [docs/camera-phase-c.md](docs/camera-phase-c.md).
 
 ---
@@ -123,7 +122,8 @@ No sensor node is wired yet; that is Phase C after CCI is confirmed.
 
 ### What Phase C did / still HUNCH
 
-Phase C (pkgrel 13, `0008`) adds the sensor node + pm8010 RGB rails.
+Phase C (pkgrel 14, `0008`+`0009`) adds the sensor node + pm8010 RGB rails
+and a 10 ms enable settle after the 7.2.2-13 chip-id `-110`.
 Remaining hunches (live confirm after install):
 
 - **Address / bus**: OV02C10 @ CCI1 i2c1 0x36 == live i2c-8. Empty

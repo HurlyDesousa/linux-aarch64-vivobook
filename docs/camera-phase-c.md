@@ -1,181 +1,165 @@
-# Camera Phase C — sensor bind + media pipeline (pkgrel 13)
+# Camera Phase C — sensor bind + media pipeline (pkgrel 14)
 
-Phase A/B already bring up CAMCC, CCI, and CAMSS. Live Omarchy on the
-installed Vivobook (current kernel with CAMSS) confirmed:
+Phase A/B already bring up CAMCC, CCI, and CAMSS. Phase C does **not**
+create `/dev/video*` — those nodes already exist.
 
-| Piece | Live status |
-|-------|-------------|
-| `/dev/video0`–`video15` + `/dev/media0` | **EXIST** — CAMSS already up |
-| `v4l-subdev0`–`27` under `acb7000.isp` | present |
-| `ac15000.cci` (CCI0) | **BOUND** — `i2c-5` (bus@0), `i2c-6` (bus@1) |
-| `ac16000.cci` (CCI1) | **BOUND** — `i2c-7` (bus@0), `i2c-8` (bus@1) |
-| CCI clients on i2c-5..8 | **NONE** |
-| `ov02c10.ko` | on disk, **not loaded** (no OF match) |
-| `i2cdetect -y 5..8` | **ALL EMPTY** (`--`) + `i2c-qcom-cci … queue N timeout` |
+Out of scope: keyboard/touchpad; `omarchy-hw-laptop` ACPI lid;
+speakers/PAS/qebspil/ADSP; Lenovo/Yoga sensor-node copies.
 
-Phase C does **not** create `/dev/video*` from scratch. Those nodes are
-CAMSS capture/RDI devices and are already there. The missing piece is
-**sensor bind** (power + CCI client + chip-id) so a media-controller
-pipeline can run: sensor → csiphy4 → csid → vfe rdi → existing video node.
+## Live 7.2.2-13 FAIL (this is the current problem)
 
-Empty CCI ACKs do **not** disprove `OV02C10 @ 0x36`. USB 1.2/1.8 V rails
-(`vreg_l3e_1p2` / `vreg_l3d_1p8`) are already on for eUSB and the sensor
-still does not ACK, so those are the **wrong** supplies. The sensor is
-unpowered until DTS enables dedicated rails + MCLK + XSHUTDOWN.
+OF bind works. Chip-id does not.
 
-`0008-x1e80100-vivobook-camera-phase-c.patch` adds only the sensor OF
-node, pm8010 RGB rails, reset/MCLK pinctrl, and the v7.2 CAMSS `port@3`
-(csiphy4) link. It does **not** change 0003/0004, speakers, or PAS.
+```
+ov02c10 8-0036: Error reading reg 0x300a: -110
+ov02c10 8-0036: failed to find sensor: -110
+ov02c10 8-0036: probe with driver ov02c10 failed with error -110
+```
 
-Out of scope: keyboard/touchpad (unrelated, leave as-is);
-`omarchy-hw-laptop` ACPI lid fail; speakers/PAS/qebspil/ADSP;
-Lenovo/Yoga sensor-node copies.
+During that probe:
 
-## What the DTS adds (HUNCH labelled)
+```
+vreg_l2m_1p2: Setting 1200000-1256000uV
+vreg_l4m_1p8: Setting 1800000-1800000uV
+vreg_l7m_2p8: Setting 2800000-2800000uV
+```
 
-No new i2c ACK exists yet, so the node stays the Phase A/B hunch.
+After fail: those three regulators are **present but disabled**
+(`num_users=0`). i2c client `8-0036` stays registered; OF path
+`cci@ac16000/i2c-bus@1/camera@36`; `waiting_for_supplier=0`.
+`i2cdetect` 5–8 still all `--`. `media-ctl` has no ov02 entity.
+No gpio237 / gpio100 / MCLK / pm8010 strings in dmesg besides the
+three vreg SET lines.
+
+### What that means
+
+| Observation | Meaning |
+|-------------|---------|
+| `ov02c10 8-0036` probed | **Bus/addr confirmed** — CCI1 i2c1 @ 0x36 == live i2c-8 |
+| Voltage SET on l2m/l4m/l7m | **pm8010-m is in CMD-DB** (`ldom2/4/7`). Not a silent miss. |
+| vregs disabled after fail | **Expected** — `ov02c10_identify_module()` fails → `ov02c10_power_off()` drops rails + MCLK + asserts reset. Not a no-op enable. |
+| No gpio/MCLK dmesg | **Expected** unless get/enable fails. Clock get succeeded (else `failed to get imaging clock`). Reset is optional and silent. |
+| chip-id `-110` + empty i2cdetect | CCI no-ACK. Sensor still not electrically ready **or** those LDOs are not the physical rails **or** reset/MCLK pin is wrong. Not an OV08X40 chip-id mismatch (that would be `-ENXIO` after an ACK). |
+
+`ov02c10_power_on()` order (do **not** rewrite the driver):
+
+1. `clk_prepare_enable` (MCLK)
+2. `regulator_bulk_enable` (dovdd, avdd, dvdd)
+3. reset assert 2 ms, deassert, wait 5 ms
+4. CCI read `0x300a`
+
+`regulator-always-on` / `regulator-boot-on` would only hide this
+sequence. Not used.
+
+## What 0008 + 0009 add
+
+`0008` — sensor OF node, pm8010-m rails, reset/MCLK, CAMSS `port@3`.
+
+`0009` (pkgrel 14) — power-on settle only:
+
+- `startup-delay-us` / `regulator-enable-ramp-delay` = 10 ms on the
+  **wired** LDOs so `bulk_enable` returns after a settle window
+  (driver only waits 5 ms after reset).
+- Unused `vreg_l1m_1p2` / `vreg_l3m_1p8` declared for a one-line
+  supply swap if l2m/l4m are the wrong physical rails.
+- Still **no** OV08X40 node (same 0x36). Swap `compatible` only.
 
 | Item | Value | Evidence |
 |------|--------|----------|
-| Bus | `&cci1_i2c1` → live **i2c-8** | CCI1 bus@1 on 7.2.2-12 |
-| Addr / compat | `camera@36` / `ovti,ov02c10` | empty scan does not refute |
-| Reset | `tlmm 237` ACTIVE_LOW (XSHUTDOWN) | SoC reference-design pin; unused on this board |
-| MCLK | `CAM_CC_MCLK4` @ 19.2 MHz, `gpio100` `cam_aon` | same; x1e80100 pinctrl groups gpio100 as `cam_aon` |
-| AVDD | `vreg_l7m_2p8` (pm8010 LDO7) | dedicated camera PMIC; 7.2 has `qcom,pm8010-rpmh-regulators` |
-| DVDD | `vreg_l2m_1p2` (pm8010 LDO2) | RGB mapping used on T14s/Romulus |
-| DOVDD | `vreg_l4m_1p8` (pm8010 LDO4) | same |
-| Parents | `vreg_s5j_1p2`, `vreg_s4c_1p8`, `vreg_bob1` | **this board's** rails, not Yoga phandles |
-| CSI | `&camss port@3` (csiphy4), 2-lane, 400 MHz | v7.2 embedded-CSIPHY binding |
+| Bus / addr | `&cci1_i2c1` `camera@36` → **i2c-8** | live OF bind `8-0036` |
+| Compat | `ovti,ov02c10` | FHD+IR spec; `-110` is no-ACK |
+| Reset | `tlmm 237` ACTIVE_LOW | SoC ref-design; unused on this board |
+| MCLK | `CAM_CC_MCLK4` @ 19.2 MHz, `gpio100` `cam_aon` | x1e80100 pinctrl; CRD names this CAM_RESET_N / MCLK on those pins |
+| AVDD / DVDD / DOVDD | `l7m` 2.8 / `l2m` 1.2 / `l4m` 1.8 | CMD-DB accepted SET on 7.2.2-13 |
+| Alt (declared, unused) | `l1m` 1.2 / `l3m` 1.8 | if still `-110` after settle |
+| Windows ACPI | `QCOM0C06` Spectra front sensor | not `OVTI02C1`; no public S5507QA camera DTS |
 
-Driver facts once probe succeeds: chip-id `0x5602`, pad format
-`SGRBG10` / 1928×1092, link-freq 400 MHz.
-
-If `rpmh-regulator` rejects pmic-id `m`, pm8010 is not on this SPMI
-bus — capture that dmesg before rewriting rails.
-
-If chip-id is not `0x5602` or ACPI HID is `OVTI08X40`, change
-`compatible` to `ovti,ov08x40` and `data-lanes` to `<1 2 3 4>` (same
-0x36 — do not enable both). `CONFIG_VIDEO_OV08X40=m` is built.
+No public Vivobook camera DTS. Do not copy Lenovo sensor wiring.
 
 ## Omarchy install
-
-Native-build on the laptop. Dual-boot: this package does not replace
-stock `linux-aarch64`.
 
 ```bash
 sudo pacman -S --needed base-devel xmlto docbook-xsl kmod inetutils bc git dtc python pahole \
     i2c-tools v4l-utils ffmpeg
-# optional GUI preview (RAW10 often will not open in these):
-# sudo pacman -S --needed cheese guvcview
-
 git clone -b cursor/vivobook-camera-phase-c-977f \
     https://github.com/HurlyDesousa/linux-aarch64-vivobook.git
 cd linux-aarch64-vivobook
 makepkg -s
-sudo pacman -U linux-aarch64-vivobook-7.2.2-13-*.pkg.tar.* \
-              linux-aarch64-vivobook-headers-7.2.2-13-*.pkg.tar.*
+sudo pacman -U linux-aarch64-vivobook-7.2.2-14-*.pkg.tar.* \
+              linux-aarch64-vivobook-headers-7.2.2-14-*.pkg.tar.*
 sudo limine-update
 sudo reboot
 ```
 
-Select `7.2.2-13-aarch64-vivobook` (or `7.2.0-13-…-ARCH` localversion).
+Select `7.2.2-14-aarch64-vivobook` (uname `7.2.0-14-…-ARCH`).
+Does not replace stock `linux-aarch64`.
 
 ## VERIFY (order matters)
 
-Pre-Phase-C `i2cdetect` on i2c-5..8 is expected empty. After this DTB,
-the **driver** enables pm8010 + MCLK + deasserts reset at probe. That is
-the power-on path. Check probe **first**; only then can i2cdetect ACK;
-only then can the media pipeline stream.
+`ls /dev/video*` is **not** success. After 0009 the **first** question
+is: does chip-id still `-110` after the 10 ms rail settle?
 
-`/dev/video0`–`15` existing before this reboot is **not** success.
-
-### 1) dmesg — sensor probe (required)
+### 1) dmesg — sensor probe
 
 ```bash
 uname -r
-# expect 7.2.2-13 / 7.2.0-13-aarch64-vivobook
+# expect 7.2.0-14-aarch64-vivobook
 
-dmesg | grep -E 'ov02c10|ov08x40|cci|camss|pm8010|rpmh-regulator|csiphy'
-lsmod | grep -E 'ov02c10|ov08x40|qcom_camss|i2c_qcom_cci'
+dmesg | rg 'ov02c10|ov08x40|cci|camss|pm8010|rpmh|vreg_l|MCLK|gpio237|ldom'
+# or: dmesg | grep -E 'ov02c10|ov08x40|cci|camss|pm8010|rpmh|vreg_l|MCLK|gpio237|ldom'
 
-# success: ov02c10 bound, chip id 0x5602, no "failed to find sensor"
-# fail signatures:
-#   rpmh / pm8010 / "failed to enable regulators"  -> rails / pmic-id m
-#   "failed to get imaging clock" / clk 19.2 MHz   -> MCLK4
-#   "failed to get reset gpio"                     -> gpio237
-#   chip id mismatch / -ENXIO                      -> try OV08X40 or other bus
-#   "waiting for fwnode graph endpoint"            -> CAMSS port@3 link
+# success: chip id 0x5602, no "failed to find sensor"
+# 7.2.2-13 fail (still possible): "Error reading reg 0x300a: -110"
+#   then vregs disabled = power_off cleanup, not a new bug
 ```
 
-### 2) i2cdetect — CCI ACK (only after probe)
+Capture next if still `-110`:
 
 ```bash
-ls /sys/class/i2c-adapter/
-# i2c-5/6 = CCI0, i2c-7/8 = CCI1; sensor hunch is i2c-8
-i2cdetect -y 8          # expect UU (driver bound) or 36
-i2cdetect -y 5; i2cdetect -y 6; i2cdetect -y 7   # if 8 still empty
+# rails after failed probe (expect disabled; that is power_off)
+for r in /sys/class/regulator/regulator.*/name; do
+  n=$(cat "$r")
+  case $n in vreg_l*m_*|vreg_l2m*|vreg_l4m*|vreg_l7m*|vreg_l1m*|vreg_l3m*)
+    d=$(dirname "$r")
+    echo "$n $(cat $d/microvolts 2>/dev/null) $(cat $d/state 2>/dev/null) users=$(cat $d/num_users 2>/dev/null)"
+  esac
+done
+
+# MCLK (0 after fail is expected — power_off unprepares it)
+cat /sys/kernel/debug/clk/cam_cc_mclk4_clk/clk_enable_count 2>/dev/null
+cat /sys/kernel/debug/clk/cam_cc_mclk4_clk/clk_rate 2>/dev/null
+
+# reset pin owner
+grep -n 237 /sys/kernel/debug/gpio 2>/dev/null
+
+# rpmh / cmd-db
+dmesg | rg 'ldom|rpmh-regulator|could not find RPMh'
 ```
 
-CCI queue timeouts with every `--` still mean unpowered / wrong bus,
-not "0x36 is wrong" by itself.
-
-### 3) media pipeline — bind the existing video node
-
-Dump the graph. Sensor entity must appear; `video0`–`15` were already
-there.
+### 2) i2cdetect — only after a successful chip-id
 
 ```bash
-v4l2-ctl --list-devices
-media-ctl -p -d /dev/media0
-media-ctl -p -d /dev/media0 | grep -E 'ov02c10|ov08x40|csiphy|csid|vfe|entity'
+i2cdetect -y 8          # UU or 36 once the driver stays bound
+i2cdetect -y 5; i2cdetect -y 6; i2cdetect -y 7
 ```
 
-Expect an `ov02c10 8-0036` (or `ov08x40 …`) entity linked toward
-`msm_csiphy4`. Entity names come from that dump — substitute if they
-differ. Then set RAW10 1928×1092 and enable csiphy → csid → vfe rdi:
+### 3) media pipeline — only after the entity exists
 
 ```bash
-MEDIA=/dev/media0
-# names are from media-ctl -p; typical x1e80100 CAMSS:
-#   "ov02c10 8-0036"  "msm_csiphy4"  "msm_csid0"  "msm_vfe0_rdi0"
-media-ctl -d $MEDIA --reset
-media-ctl -d $MEDIA -V '"ov02c10 8-0036":0[fmt:SGRBG10_1X10/1928x1092 field:none]'
-media-ctl -d $MEDIA -V '"msm_csiphy4":0[fmt:SGRBG10_1X10/1928x1092]'
-media-ctl -d $MEDIA -V '"msm_csid0":0[fmt:SGRBG10_1X10/1928x1092]'
-media-ctl -d $MEDIA -V '"msm_vfe0_rdi0":0[fmt:SGRBG10_1X10/1928x1092]'
-media-ctl -d $MEDIA -l '"msm_csiphy4":1 -> "msm_csid0":0[1]'
-media-ctl -d $MEDIA -l '"msm_csid0":1 -> "msm_vfe0_rdi0":0[1]'
+media-ctl -p -d /dev/media0 | grep -E 'ov02c10|csiphy|csid|vfe'
+# then SGRBG10 1928x1092, csiphy4 -> csid0 -> vfe0_rdi0, capture that videoN
 ```
 
-Find the **capture** node attached to that VFE RDI (do not assume
-`/dev/video0`):
+## If 14 still `-110`
 
-```bash
-media-ctl -p -d $MEDIA | grep -A2 'vfe0_rdi0\|vfe_lite'
-# then, using the videoN listed for that entity:
-v4l2-ctl -d /dev/videoN --list-formats-ext
-v4l2-ctl -d /dev/videoN --set-fmt-video=width=1928,height=1092,pixelformat=GRBG \
-         --stream-mmap --stream-count=2 --stream-to=/tmp/cam-test.raw
-# pixelformat: try GRBG / GB10 / RG10 as listed by --list-formats-ext
-```
+| Next swap | How |
+|-----------|-----|
+| Wrong physical LDOs | Point `dvdd-supply` at `<&vreg_l1m_1p2>` and `dovdd-supply` at `<&vreg_l3m_1p8>` (already in DTS, unused) |
+| Reset polarity | Try `GPIO_ACTIVE_HIGH` on gpio237 |
+| Reset pin | Need ACPI/BSP GPIO (Windows HID `QCOM0C06`); no public dump yet |
+| MCLK pin | Need ACPI/BSP; SoC ref is gpio100 `cam_aon` / MCLK4 |
+| OV08X40 | Only if a future chip-id ACK returns not `0x5602`. Change `compatible` + 4-lane; do not add a second `@36` |
+| `regulator-always-on` | Last resort only, to see whether rails dropping mid-CCI is real |
 
-Cheese/guvcview usually want YUYV. First success is a non-zero
-`cam-test.raw` (or ffmpeg on that same `videoN`). GUI preview is a
-follow-up after RAW capture works.
-
-`camera@8e100000` reserved-memory and `camera0/1-thermal` already appear
-on the live DT (SoC / later hamoa). Phase C does not add them.
-
-`camcc … sync_state pending` for CCI/ISP can still appear at boot;
-it is not the Phase C pass/fail.
-
-## If probe or pipeline fails
-
-| Symptom | Next |
-|---------|------|
-| no ov02c10 lines | DTB not this package; check `/proc/device-tree` for `cci@ac16000/.../camera@36` |
-| rpmh / regulators fail | pm8010 id `m` wrong or missing; dump `dmesg \| grep rpmh` |
-| chip-id mismatch | try OV08X40 compatible + 4-lane; or move node to i2c-5/6/7 |
-| still no ACK after successful chip-id | unexpected; capture `i2cdetect` + `media-ctl -p` |
-| sensor bound, no csiphy link | CAMSS `port@3` / remote-endpoint; paste `media-ctl -p` |
-| links set, zero-length capture | format/lane mismatch or still-wrong CSIPHY rails; paste v4l2-ctl + dmesg |
+Paste the `dmesg \| rg` + regulator + clk + gpio237 captures before the
+next DTS guess.

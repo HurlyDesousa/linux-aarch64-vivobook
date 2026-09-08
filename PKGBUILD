@@ -10,7 +10,7 @@ _alarmrel=2
 _srcname=linux-7.2
 _desc="AArch64 Vivobook S15 (x1e80100)"
 pkgver=${_alarmver}
-pkgrel=13
+pkgrel=14
 arch=('aarch64')
 url="https://github.com/HurlyDesousa/linux-aarch64-vivobook"
 license=('GPL-2.0-only')
@@ -33,7 +33,8 @@ source=("https://www.kernel.org/pub/linux/kernel/v7.x/${_srcname}.tar.xz"
         "0004-i2c-qcom-cci-power-on-gdsc-before-hw-init.patch"
         "0005-x1e-adsp-reuse-authenticated-dtb.patch"
         "0006-x1e-adsp-attach-running-main.patch"
-        "0008-x1e80100-vivobook-camera-phase-c.patch")
+        "0008-x1e80100-vivobook-camera-phase-c.patch"
+        "0009-x1e80100-vivobook-camera-phase-c-seq.patch")
 # md5 of the files this PKGBUILD actually downloads (kernel.org + GitHub raw).
 # Do not copy ALARM's md5sums array: theirs is aligned to extra chromebook
 # sources and does not match these URLs.
@@ -54,7 +55,8 @@ md5sums=('381ae4b20294dcf4b8f63f1fd1bb7017'  # linux-7.2.tar.xz
          'SKIP'                             # 0004 CCI GDSC pm_runtime fix
          'SKIP'                             # 0005 reuse UEFI/qebspil ADSP DTB
          'SKIP'                             # 0006 attach UEFI/qebspil main ADSP
-         'SKIP')                            # 0008 camera phase-c sensor DTS
+         'SKIP'                             # 0008 camera phase-c sensor DTS
+         'SKIP')                            # 0009 camera phase-c power-on settle
 
 prepare() {
   cd $_srcname
@@ -79,6 +81,7 @@ prepare() {
   patch -p1 --forward --batch < "${srcdir}/0005-x1e-adsp-reuse-authenticated-dtb.patch"
   patch -p1 --forward --batch < "${srcdir}/0006-x1e-adsp-attach-running-main.patch"
   patch -p1 --forward --batch < "${srcdir}/0008-x1e80100-vivobook-camera-phase-c.patch"
+  patch -p1 --forward --batch < "${srcdir}/0009-x1e80100-vivobook-camera-phase-c-seq.patch"
 
   cat "${srcdir}/config" > ./.config
   ./scripts/kconfig/merge_config.sh -m .config "${srcdir}/config.vivobook"

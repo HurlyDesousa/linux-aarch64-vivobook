@@ -10,10 +10,9 @@ CONFIG_RESET_GPIO=y
 # Still needs qcvss8380.mbn in firmware (not in this repo).
 CONFIG_VIDEO_QCOM_IRIS=m
 #
-# OV02C10 front camera -- Phase C (2026). Sensor DTS is in 0008.
-# Live 7.2.2-12: module was on disk but unmatched (no OF node).
-# HUNCH: CCI1 i2c1 @ 0x36 == live i2c-8. Empty i2cdetect before this
-# DTB is expected (unpowered). OV08X40 is the 4-lane alternative at
+# OV02C10 front camera -- Phase C (2026). Sensor DTS is 0008+0009.
+# Live 7.2.2-13: OF bind 8-0036 OK; chip-id 0x300a -110; vregs SET
+# then power_off disables them. OV08X40 is the 4-lane alternative at
 # the same address -- compile both; DTS binds only OV02C10.
 # ALARM already has CAMSS / CCI / CAMCC.
 CONFIG_VIDEO_OV02C10=m
