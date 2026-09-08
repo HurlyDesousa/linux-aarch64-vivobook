@@ -8,6 +8,33 @@ This is **not** the omarchy-iso fork. Native-build on the laptop (X Elite).
 Dual-boots with stock `linux-aarch64`: this package does not Provide `linux`
 and does not Conflict the stock kernel.
 
+## Camera — Phase C (pkgrel 15) — HOLD install
+
+Live Omarchy already has CAMSS: `/dev/video0`–`video15` and
+`/dev/media0` **exist**. Phase C does **not** create those nodes.
+
+**7.2.2-14 live:** OF bind `ov02c10 8-0036` is correct. Chip-id
+`0x300a` still `-110`. `l2m`/`l4m`/`l7m` `num_users=0` after fail
+is power_off unwind, not a driver skip — those LDOs are **CAMI
+(IR)**, not CAMF. S5507QA AeoB CAMF votes `LDO7_B` @ 2.8 V +
+`LDO3_M` @ 1.8 V (same as Zenbook A14). SCFG_FRONT is `ov02c10`
+chip-id `0x5602`.
+
+`0010` wires `avdd`+`dvdd` to `vreg_l7b_2p8` and `dovdd` to
+`vreg_l3m_1p8`. No `regulator-always-on`. No driver rewrite
+(supply names already match). Keyboard/touchpad and ACPI lid stay
+out of scope.
+
+**HOLD** `pacman -U` until greenlight.
+
+Install / VERIFY:
+[docs/camera-phase-c.md](docs/camera-phase-c.md).
+Raw capture after probe:
+[docs/camera-phase-c-preview.md](docs/camera-phase-c-preview.md)
+(`scripts/camera-ov02c10-raw.sh`).
+
+---
+
 ## Camera — Phase B (pkgrel 7)
 
 ### Phase B live results (7.2.0-6, pkg 7.2.2-6)
@@ -99,19 +126,20 @@ No sensor node is wired yet; that is Phase C after CCI is confirmed.
 | Board enable | `x1-asus-vivobook-s15.dtsi` | `&camss`, `&cci0`, `&cci1` status=okay |
 | `CONFIG_VIDEO_OV02C10=m` | `config.vivobook` | Module compiled, NOT bound (no DTS sensor node yet) |
 
-### What is left as TODO / Phase C
+### What Phase C did / still HUNCH
 
-- **Sensor node**: OV02C10 @ CCI1 i2c1 0x36 is a **HUNCH** — must be
-  confirmed by `i2cdetect` once CCI adapters appear.
-- **CSIPHY supply regulators**: `vdd-csiphy-0p8-supply` / `1p2-supply`
-  in the board DTS use `vreg_l1d_0p8` / `vreg_l3e_1p2` as guesses (no
-  pm8010 camera PMIC visible in Vivobook DTS).  Verify against BSP
-  schematic before wiring a sensor.
-- **PHY API**: upstream v13 CSIPHY series (Bryan O'Donoghue / Linaro,
-  still under review 2026-07) will replace embedded CSIPHY with
-  separate `csiphy@` nodes; update in a follow-up once merged.
-- **ACPI HID**: OVTI02C1 vs OVTI08X40 still unconfirmed from Vivobook
-  DSDT; not blocking this PR.
+Phase C (pkgrel 15, `0008`+`0009`+`0010`) adds the sensor node and
+wires AeoB CAMF rails (`l7b` + `l3m`) after 7.2.2-13/14 chip-id
+`-110` on the T14s `l2m`/`l4m`/`l7m` copy.
+
+- **Address / bus**: OV02C10 @ CCI1 i2c1 0x36 == live i2c-8.
+- **CAMF rails**: AeoB `LDO7_B` + `LDO3_M`. `l4m`/`l7m` are CAMI.
+- **Sensor**: SCFG_FRONT_QRD is `ov02c10` / chip-id `0x5602`.
+- **CSIPHY supplies**: still Phase A guesses (`vreg_l1d_0p8` /
+  `vreg_l3e_1p2`).
+- **PHY API**: upstream v13 CSIPHY series will replace embedded
+  CSIPHY; follow-up once merged.
+- **ACPI HID**: Windows `QCOM0C06` (Spectra), not `OVTI02C1`.
 
 ### Post-boot checks
 
@@ -121,7 +149,8 @@ ls /sys/class/i2c-adapter/          # new i2c-N entries for CCI0 and CCI1
 dmesg | grep -E 'cci|camss|csiphy|qcom-camss'
 # Phase B: once CCI adapters are confirmed:
 i2cdetect -y <N>                    # look for 0x36 on the CCI1 i2c1 bus
-ls /dev/video*                      # will be empty until Phase C sensor bind
+# /dev/video0-15 already exist from CAMSS; Phase C is sensor bind, not
+# creating those nodes.
 ```
 
 See `0003-x1e80100-vivobook-camera-phase-a.patch` for the full DTS.
@@ -135,7 +164,8 @@ See `0003-x1e80100-vivobook-camera-phase-a.patch` for the full DTS.
 | `CONFIG_RESET_GPIO` | unset | **y** (WSA amp reset / unmute after ADSP) |
 | `CONFIG_POWER_RESET_GPIO` | y | unchanged |
 | `CONFIG_VIDEO_QCOM_IRIS` | unset | **m** (needs `qcvss8380.mbn`; decode still needs the module) |
-| `CONFIG_VIDEO_OV02C10` | unset | **m** (Phase A: module compiled, not bound — no sensor DTS yet) |
+| `CONFIG_VIDEO_OV02C10` | unset | **m** (Phase C: DTS binds `ovti,ov02c10` on CCI1 i2c1) |
+| `CONFIG_VIDEO_OV08X40` | unset | **m** (compiled, not bound — 4-lane alternative at 0x36) |
 | `CONFIG_QCOM_Q6V5_PAS` | m | unchanged |
 | `CONFIG_SND_SOC_SC8280XP` | m | unchanged |
 

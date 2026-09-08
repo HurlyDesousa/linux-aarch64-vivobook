@@ -10,7 +10,7 @@ _alarmrel=2
 _srcname=linux-7.2
 _desc="AArch64 Vivobook S15 (x1e80100)"
 pkgver=${_alarmver}
-pkgrel=11
+pkgrel=15
 arch=('aarch64')
 url="https://github.com/HurlyDesousa/linux-aarch64-vivobook"
 license=('GPL-2.0-only')
@@ -32,10 +32,14 @@ source=("https://www.kernel.org/pub/linux/kernel/v7.x/${_srcname}.tar.xz"
         "0003-x1e80100-vivobook-camera-phase-a.patch"
         "0004-i2c-qcom-cci-power-on-gdsc-before-hw-init.patch"
         "0005-x1e-adsp-reuse-authenticated-dtb.patch"
-        "0006-x1e-adsp-attach-running-main.patch")
+        "0006-x1e-adsp-attach-running-main.patch"
+        "0008-x1e80100-vivobook-camera-phase-c.patch"
+        "0009-x1e80100-vivobook-camera-phase-c-seq.patch"
+        "0010-x1e80100-vivobook-camera-phase-c-aeob-rails.patch")
 # md5 of the files this PKGBUILD actually downloads (kernel.org + GitHub raw).
 # Do not copy ALARM's md5sums array: theirs is aligned to extra chromebook
 # sources and does not match these URLs.
+# ALARM tip config can drift; md5 must match the fetched ${_alarm}/config file.
 md5sums=('381ae4b20294dcf4b8f63f1fd1bb7017'  # linux-7.2.tar.xz
          '4ed13fbca5aa1335e460f019010fb966'  # patch-7.2.2.xz
          '328ab847d1a56a5cabbb4779d931a175'  # 0001
@@ -43,7 +47,7 @@ md5sums=('381ae4b20294dcf4b8f63f1fd1bb7017'  # linux-7.2.tar.xz
          '86dc20adc64478c726a7a9f8fcf56337'  # 0003
          'a9bcf91cab44e1193240a43189a9313f'  # 0004
          '24c403d3738a418a67b8c0e7659380aa'  # 0005
-         '571de3681ddc773bb85e323b92e407da'  # config
+         'df7a3c878ccdb5b23503839a2bca14e7'  # config
          'f82b1a5732c416762bbc88e00b1a4b15'  # linux.preset
          'SKIP'                             # config.vivobook
          'SKIP'                             # 0001 x1e adsp
@@ -51,7 +55,10 @@ md5sums=('381ae4b20294dcf4b8f63f1fd1bb7017'  # linux-7.2.tar.xz
          'SKIP'                             # 0003 camera phase-a
          'SKIP'                             # 0004 CCI GDSC pm_runtime fix
          'SKIP'                             # 0005 reuse UEFI/qebspil ADSP DTB
-         'SKIP')                            # 0006 attach UEFI/qebspil main ADSP
+         'SKIP'                             # 0006 attach UEFI/qebspil main ADSP
+         'SKIP'                             # 0008 camera phase-c sensor DTS
+         'SKIP'                             # 0009 camera phase-c power-on settle
+         'SKIP')                            # 0010 camera phase-c AeoB CAMF rails
 
 prepare() {
   cd $_srcname
@@ -75,13 +82,16 @@ prepare() {
   patch -p1 --forward --batch < "${srcdir}/0004-i2c-qcom-cci-power-on-gdsc-before-hw-init.patch"
   patch -p1 --forward --batch < "${srcdir}/0005-x1e-adsp-reuse-authenticated-dtb.patch"
   patch -p1 --forward --batch < "${srcdir}/0006-x1e-adsp-attach-running-main.patch"
+  patch -p1 --forward --batch < "${srcdir}/0008-x1e80100-vivobook-camera-phase-c.patch"
+  patch -p1 --forward --batch < "${srcdir}/0009-x1e80100-vivobook-camera-phase-c-seq.patch"
+  patch -p1 --forward --batch < "${srcdir}/0010-x1e80100-vivobook-camera-phase-c-aeob-rails.patch"
 
   cat "${srcdir}/config" > ./.config
   ./scripts/kconfig/merge_config.sh -m .config "${srcdir}/config.vivobook"
   make olddefconfig
 
   echo "config fragment vs ALARM:"
-  grep -E 'CONFIG_RESET_GPIO=|CONFIG_VIDEO_QCOM_IRIS=|CONFIG_VIDEO_OV02C10=' .config || true
+  grep -E 'CONFIG_RESET_GPIO=|CONFIG_VIDEO_QCOM_IRIS=|CONFIG_VIDEO_OV02C10=|CONFIG_VIDEO_OV08X40=' .config || true
 }
 
 build() {

@@ -1,0 +1,161 @@
+From: Grokbot <grokbot@s-w.art>
+Subject: arm64: dts: qcom: vivobook-s15: AeoB CAMF rails (Phase C)
+
+Live 7.2.2-14 still chip-id -110 on ov02c10 8-0036. Post-fail
+vreg_l2m/l4m/l7m num_users=0 is power_off + probe unwind -- the
+7.2 driver already bulk_get(dovdd,avdd,dvdd) and bulk_enable
+before the 0x300a read. Those three LDOs are the wrong pins.
+
+S5507QA AeoB CAMF_RES_QRD (front RGB, identical to Zenbook A14):
+
+  PMICVREGVOTE LDO7_B  0x2AB980 = 2.801 V
+  PMICVREGVOTE LDO3_M  0x1B7740 = 1.800 V
+  cam_cc_mclk4_clk     19.2 MHz
+  TLMMGPIO 0xED        = gpio237 reset (assert, rails, MCLK, deassert)
+  SCFG_FRONT_QRD       com.qti.sensormodule.ov02c10.bin, id 0x5602300A
+
+CAMI (IR) is the one that votes LDO4_M + LDO7_M. T14s RGB
+l7m/l2m/l4m was a copy of the wrong camera.
+
+Wire ov02c10 like Zenbook A14 (AeoB-extracted):
+  avdd + dvdd -> vreg_l7b_2p8 (pm8550-b ldo7; vdd-l6-l7 already bob2)
+  dovdd      -> vreg_l3m_1p8 (pm8010-m ldo3; already declared)
+Keep l2m/l4m/l7m declared unused (IR leftovers). No always-on.
+No driver rewrite -- supply names already match.
+
+Signed-off-by: Grokbot <grokbot@s-w.art>
+--- a/arch/arm64/boot/dts/qcom/x1-asus-vivobook-s15.dtsi
++++ b/arch/arm64/boot/dts/qcom/x1-asus-vivobook-s15.dtsi
+@@ -451,6 +451,16 @@
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+ 
++		/* CAMF AVDD+DVDD -- AeoB LDO7_B @ 2.8 V */
++		vreg_l7b_2p8: ldo7 {
++			regulator-name = "vreg_l7b_2p8";
++			regulator-min-microvolt = <2800000>;
++			regulator-max-microvolt = <2800000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			regulator-enable-ramp-delay = <10000>;
++			startup-delay-us = <10000>;
++		};
++
+ 		vreg_l13b_3p0: ldo13 {
+ 			regulator-name = "vreg_l13b_3p0";
+ 			regulator-min-microvolt = <3072000>;
+@@ -624,14 +634,11 @@
+ 	};
+ 
+ 	/*
+-	 * PM8010 camera PMIC (RPMh id m). Live 7.2.2-13: l2m/l4m/l7m
+-	 * SET voltage then ov02c10 chip-id -110; after fail the vregs
+-	 * are disabled because probe calls power_off. CMD-DB has
+-	 * ldom2/4/7 -- id m is not a silent miss. Remaining hunches:
+-	 * wrong physical LDO (swap to l1m/l3m below), reset gpio237
+-	 * polarity/number, MCLK gpio100 not reaching the module.
+-	 * Parents are this board's s5j / s4c / bob1.
+-	 * Do not use regulator-always-on; that hides sequencing.
++	 * PM8010 camera PMIC (RPMh id m). AeoB CAMF (front RGB) votes
++	 * LDO3_M @ 1.8 V for DOVDD. LDO4_M / LDO7_M are CAMI (IR).
++	 * Live 7.2.2-13/14 wired T14s RGB (l2m/l4m/l7m) and got
++	 * chip-id -110 -- those rails are not CAMF. gpio237 + MCLK4
++	 * match CAMF_RES_QRD. Do not use regulator-always-on.
+ 	 */
+ 	regulators-8 {
+ 		compatible = "qcom,pm8010-rpmh-regulators";
+@@ -641,7 +648,7 @@
+ 		vdd-l3-l4-supply = <&vreg_s4c_1p8>;
+ 		vdd-l7-supply = <&vreg_bob1>;
+ 
+-		/* Unused alt DVDD -- wire instead of l2m if still -110 */
++		/* Unused -- not in CAMF AeoB */
+ 		vreg_l1m_1p2: ldo1 {
+ 			regulator-name = "vreg_l1m_1p2";
+ 			regulator-min-microvolt = <1200000>;
+@@ -649,7 +656,7 @@
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+ 
+-		/* RGB DVDD */
++		/* Unused -- not in CAMF AeoB */
+ 		vreg_l2m_1p2: ldo2 {
+ 			regulator-name = "vreg_l2m_1p2";
+ 			regulator-min-microvolt = <1200000>;
+@@ -660,15 +667,17 @@
+ 			startup-delay-us = <10000>;
+ 		};
+ 
+-		/* Unused alt DOVDD -- wire instead of l4m if still -110 */
++		/* CAMF DOVDD -- AeoB LDO3_M @ 1.8 V */
+ 		vreg_l3m_1p8: ldo3 {
+ 			regulator-name = "vreg_l3m_1p8";
+ 			regulator-min-microvolt = <1800000>;
+-			regulator-max-microvolt = <1900000>;
++			regulator-max-microvolt = <1800000>;
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			regulator-enable-ramp-delay = <10000>;
++			startup-delay-us = <10000>;
+ 		};
+ 
+-		/* RGB DOVDD */
++		/* CAMI IR leftover -- not wired to ov02c10 */
+ 		vreg_l4m_1p8: ldo4 {
+ 			regulator-name = "vreg_l4m_1p8";
+ 			regulator-min-microvolt = <1800000>;
+@@ -678,7 +687,7 @@
+ 			startup-delay-us = <10000>;
+ 		};
+ 
+-		/* RGB AVDD */
++		/* CAMI IR leftover -- not wired to ov02c10 */
+ 		vreg_l7m_2p8: ldo7 {
+ 			regulator-name = "vreg_l7m_2p8";
+ 			regulator-min-microvolt = <2800000>;
+@@ -1430,16 +1439,14 @@
+  * can use those nodes -- it does not create video devices.
+  *
+  * Live 7.2.2-12: CCI0=i2c-5/6 CCI1=i2c-7/8; i2cdetect 5..8 ALL EMPTY
+- * then 7.2.2-13 OF-bound ov02c10 8-0036; chip-id 0x300a -110.
+- * vregs SET then power_off disables them. Bus/addr confirmed.
++ * then 7.2.2-13/14 OF-bound ov02c10 8-0036; chip-id 0x300a -110
++ * on T14s l2m/l4m/l7m. Bus/addr confirmed. Rails were the miss.
+  *
+  * OV08X40 is the same 0x36 / 4-lane alternative -- do not enable
+- * both. -110 is no-ACK, not a chip-id mismatch.
++ * both. SCFG_FRONT_QRD is ov02c10 / chip-id 0x5602 @ 0x300a.
+  *
+- * HUNCH remaining: physical LDO map, reset gpio237 polarity, MCLK
+- * gpio100. ACPI Windows HID is QCOM0C06 (Spectra), not OVTI02C1;
+- * no public S5507QA camera DTS. SoC ref-design still gpio237 +
+- * gpio100 cam_aon / MCLK4 @ 19.2 MHz.
++ * AeoB CAMF: LDO7_B + LDO3_M, gpio237, MCLK4 @ 19.2 MHz.
++ * ACPI Windows HID is QCOM0C06 (Spectra), not OVTI02C1.
+  *
+  * v7.2 CAMSS is legacy embedded-CSIPHY: sensor -> &camss port@3
+  * (csiphy4). Separate &csiphy4 is the later PHY-API series.
+@@ -1490,8 +1497,8 @@
+ 
+ /*
+  * CCI1 i2c1 == live i2c-8. 7.2.2-13 OF-bound ov02c10 8-0036.
+- * power_on: MCLK, then rails (10 ms startup-delay-us), then
+- * XSHUTDOWN deassert (ACTIVE_LOW gpio237), then CCI chip-id.
++ * AeoB CAMF rails: avdd+dvdd=l7b, dovdd=l3m. power_on: MCLK,
++ * bulk_enable, XSHUTDOWN deassert (gpio237), then CCI chip-id.
+  * Do not add a second camera@36 (OV08X40); swap compatible only.
+  */
+ &cci1_i2c1 {
+@@ -1509,10 +1516,10 @@
+ 
+ 		orientation = <0>; /* front facing */
+ 
+-		/* Wired: l7m/l2m/l4m. Alt (declared, unused): l1m/l3m */
+-		avdd-supply = <&vreg_l7m_2p8>;
+-		dvdd-supply = <&vreg_l2m_1p2>;
+-		dovdd-supply = <&vreg_l4m_1p8>;
++		/* AeoB CAMF_RES_QRD: LDO7_B + LDO3_M (Zenbook A14 map) */
++		avdd-supply = <&vreg_l7b_2p8>;
++		dvdd-supply = <&vreg_l7b_2p8>;
++		dovdd-supply = <&vreg_l3m_1p8>;
+ 
+ 		port {
+ 			ov02c10_ep: endpoint {

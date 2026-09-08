@@ -1,0 +1,222 @@
+From: Grokbot <grokbot@s-w.art>
+Subject: arm64: dts: qcom: vivobook-s15: add OV02C10 sensor (Phase C)
+
+Wire the front RGB sensor on ASUS Vivobook S15 S5507QA so ov02c10
+can bind as a CCI client and power the module. Phase A/B already
+enable CAMCC + CCI + CAMSS -- do not reinvent those blocks.
+
+Live 7.2.2-12 (S5507QA):
+  * CAMSS up: video0-15, media0, v4l-subdev0-27
+  * CCI0 ac15000 -> i2c-5 (bus@0), i2c-6 (bus@1)
+  * CCI1 ac16000 -> i2c-7 (bus@0), i2c-8 (bus@1)
+  * i2cdetect -y 5..8 ALL EMPTY + CCI queue timeouts
+  * ov02c10.ko on disk, no OF match, zero CCI clients
+
+Empty CCI ACKs do not disprove OV02C10@0x36. USB 1.2/1.8 V rails
+(vreg_l3e_1p2 / vreg_l3d_1p8) are already on and the sensor still
+does not ACK, so those are the wrong supplies. Phase C must enable
+dedicated camera rails + MCLK + XSHUTDOWN before expect i2cdetect.
+
+v7.2 CAMSS is legacy embedded-CSIPHY: sensor endpoint -> &camss
+port@3 (csiphy4). Separate &csiphy4 is the later PHY-API series.
+
+HUNCH (labelled; confirm on the laptop after this DTB):
+  * OV02C10 @ CCI1 i2c1 0x36 == live i2c-8
+  * reset gpio237 / MCLK gpio100 cam_aon + CAM_CC_MCLK4 @ 19.2 MHz
+  * pm8010 camera PMIC (rpmh pmic-id m) -- 7.2 already has
+    qcom,pm8010-rpmh-regulators. Parents are Vivobook rails
+    (s5j 1.2, s4c 1.8, bob1). Not a Yoga sensor-node copy.
+    RGB: avdd=l7m 2.8, dvdd=l2m 1.2, dovdd=l4m 1.8 (T14s/Romulus
+    RGB mapping). If rpmh rejects id m, dmesg will say so.
+
+If chip-id is not 0x5602 / HID is OVTI08X40, switch compatible
+to ovti,ov08x40 and 4-lane (same 0x36 -- not both).
+
+VERIFY order: dmesg sensor probe (power + chip-id) -> then
+i2cdetect ACK/UU on i2c-8 -> then media-ctl pipeline on the
+already-present /dev/video* (do not treat ls /dev/video* as
+success).
+
+Signed-off-by: Grokbot <grokbot@s-w.art>
+--- a/arch/arm64/boot/dts/qcom/x1-asus-vivobook-s15.dtsi
++++ b/arch/arm64/boot/dts/qcom/x1-asus-vivobook-s15.dtsi
+@@ -8,6 +8,7 @@
+ #include <dt-bindings/input/gpio-keys.h>
+ #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+ #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
++#include <dt-bindings/clock/qcom,x1e80100-camcc.h>
+ 
+ #include "hamoa-pmics.dtsi"
+ 
+@@ -621,6 +622,49 @@
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+ 	};
++
++	/*
++	 * HUNCH: PM8010 camera PMIC (RPMh id m). Live i2cdetect on
++	 * CCI i2c-5..8 is all-empty while USB 1.2/1.8 V rails are
++	 * already on, so the sensor is not on those rails. Every
++	 * published x1e80100 RGB camera uses pm8010 for AVDD/DVDD/
++	 * DOVDD. 7.2 already matches qcom,pm8010-rpmh-regulators.
++	 * Parents are this board's s5j / s4c / bob1 -- not Yoga
++	 * phandles. If this PMIC is absent, rpmh-regulator / ov02c10
++	 * probe will fail; that is the live check.
++	 */
++	regulators-8 {
++		compatible = "qcom,pm8010-rpmh-regulators";
++		qcom,pmic-id = "m";
++
++		vdd-l1-l2-supply = <&vreg_s5j_1p2>;
++		vdd-l3-l4-supply = <&vreg_s4c_1p8>;
++		vdd-l7-supply = <&vreg_bob1>;
++
++		/* RGB DVDD */
++		vreg_l2m_1p2: ldo2 {
++			regulator-name = "vreg_l2m_1p2";
++			regulator-min-microvolt = <1200000>;
++			regulator-max-microvolt = <1260000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		/* RGB DOVDD */
++		vreg_l4m_1p8: ldo4 {
++			regulator-name = "vreg_l4m_1p8";
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1900000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
++		/* RGB AVDD */
++		vreg_l7m_2p8: ldo7 {
++			regulator-name = "vreg_l7m_2p8";
++			regulator-min-microvolt = <2800000>;
++			regulator-max-microvolt = <2800000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++	};
+ };
+ 
+ &gpu {
+@@ -1356,29 +1400,53 @@
+ };
+ 
+ /*
+- * Camera Phase A -- CAMSS + CCI enabled, no sensor node.
++ * Camera Phase C -- OV02C10 RGB sensor on CCI1 i2c1 (live i2c-8).
+  *
+- * HUNCH / TODO: vdd-csiphy supplies are guesses from available Vivobook
+- * PMIC rails. Peer boards (Yoga Slim 7x, T14s) use a pm8010 camera PMIC;
+- * the Vivobook S15 DTS has no pm8010.
+- *   vreg_l1d_0p8 = ldo1 of pmc8380_d  (880-920 mV)  -> 0.8V CSIPHY rail
+- *   vreg_l3e_1p2 = ldo3 of pmc8380_e  (1.2 V)       -> 1.2V CSIPHY rail
+- * Must verify against ASUS BSP schematic before Phase C (sensor enable).
+- * Safe for Phase A: CSIPHY regulators only asserted during streaming.
++ * Live CAMSS already provides /dev/video0-15 and /dev/media0. This
++ * overlay binds the sensor + csiphy4 endpoint so the media pipeline
++ * can use those nodes -- it does not create video devices.
++ *
++ * Live 7.2.2-12: CCI0=i2c-5/6 CCI1=i2c-7/8; i2cdetect 5..8 ALL EMPTY
++ * (CCI queue timeouts). ov02c10.ko unmatched. Empty scan means
++ * unpowered, not "wrong address". Do not reinvent CAMSS/CCI.
+  *
+- * CCI1 is enabled (OV02C10 front camera expected on CCI1 i2c1 @ 0x36 --
+- * this is a HUNCH, pending post-boot i2cdetect once CCI adapters appear).
+- * CCI0 is also enabled; sensor assignment unknown at this stage.
++ * HUNCH: OV02C10 @ CCI1 i2c1 0x36 => i2c-8. Also scan 5/6/7 after
++ * probe. OV08X40 is the same 0x36 / 4-lane alternative -- not both.
+  *
+- * Post-boot verification:
+- *   ls /sys/class/i2c-adapter/
+- *   dmesg | grep -E 'cci|camss|csiphy|qcom-camss'
++ * HUNCH power: pm8010 RGB rails (see regulators-8). USB 1.2/1.8 V
++ * rails are already on and still no ACK -- do not reuse them as
++ * avdd/dvdd/dovdd. HUNCH reset/MCLK: gpio237 + gpio100 cam_aon /
++ * MCLK4 @ 19.2 MHz (SoC reference-design pins; unused here).
++ *
++ * v7.2 CAMSS is legacy embedded-CSIPHY: sensor -> &camss port@3
++ * (csiphy4). Separate &csiphy4 is the later PHY-API series.
+  */
+ &camss {
+-	/* TODO: replace with verified BSP camera regulator rail names */
++	/* HUNCH: CSIPHY rails -- Phase A guesses, still unverified vs BSP */
+ 	vdd-csiphy-0p8-supply = <&vreg_l1d_0p8>;
+ 	vdd-csiphy-1p2-supply = <&vreg_l3e_1p2>;
+ 	status = "okay";
++
++	ports {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		/*
++		 * port0 => csiphy0
++		 * port1 => csiphy1
++		 * port2 => csiphy2
++		 * port3 => csiphy4
++		 */
++		port@3 {
++			reg = <3>;
++
++			camss_csiphy4_ep: endpoint {
++				clock-lanes = <7>;
++				data-lanes = <0 1>;
++				remote-endpoint = <&ov02c10_ep>;
++			};
++		};
++	};
+ };
+ 
+ &cci0 {
+@@ -1396,3 +1464,52 @@
+ 
+ 	status = "okay";
+ };
++
++/* HUNCH: CCI1 i2c1 == live i2c-8 on 7.2.2-12 */
++&cci1_i2c1 {
++	camera@36 {
++		compatible = "ovti,ov02c10";
++		reg = <0x36>;
++
++		reset-gpios = <&tlmm 237 GPIO_ACTIVE_LOW>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&cam_rgb_default>;
++
++		clocks = <&camcc CAM_CC_MCLK4_CLK>;
++		assigned-clocks = <&camcc CAM_CC_MCLK4_CLK>;
++		assigned-clock-rates = <19200000>;
++
++		orientation = <0>; /* front facing */
++
++		/* HUNCH: pm8010 RGB rails -- see regulators-8 */
++		avdd-supply = <&vreg_l7m_2p8>;
++		dvdd-supply = <&vreg_l2m_1p2>;
++		dovdd-supply = <&vreg_l4m_1p8>;
++
++		port {
++			ov02c10_ep: endpoint {
++				data-lanes = <1 2>;
++				link-frequencies = /bits/ 64 <400000000>;
++				remote-endpoint = <&camss_csiphy4_ep>;
++			};
++		};
++	};
++};
++
++&tlmm {
++	cam_rgb_default: cam-rgb-default-state {
++		mclk-pins {
++			pins = "gpio100";
++			function = "cam_aon";
++			drive-strength = <16>;
++			bias-disable;
++		};
++
++		reset-n-pins {
++			pins = "gpio237";
++			function = "gpio";
++			drive-strength = <2>;
++			bias-disable;
++		};
++	};
++};

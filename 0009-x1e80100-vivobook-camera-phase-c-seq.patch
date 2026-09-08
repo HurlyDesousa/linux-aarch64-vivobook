@@ -1,0 +1,152 @@
+From: Grokbot <grokbot@s-w.art>
+Subject: arm64: dts: qcom: vivobook-s15: camera power-on settle (Phase C)
+
+Live 7.2.2-13: ov02c10 binds 8-0036 (CCI1 i2c1 @ 0x36 is correct).
+rpmh accepts vreg_l2m/l4m/l7m voltage sets, then:
+
+  ov02c10 8-0036: Error reading reg 0x300a: -110
+  ov02c10 8-0036: failed to find sensor: -110
+
+After fail the three vregs are present but disabled (num_users=0).
+That is ov02c10_power_off() on the identify_module error path --
+NOT proof that pm8010-m is a no-op. CMD-DB has ldom2/4/7.
+
+ov02c10_power_on() order (do not patch the driver):
+  1) clk_prepare_enable (MCLK)
+  2) regulator_bulk_enable (dovdd, avdd, dvdd)
+  3) reset assert 2 ms, deassert, wait 5 ms
+  4) CCI read 0x300a
+No gpio237/gpio100/MCLK dmesg is expected unless those get/enable
+calls fail. Clock get already succeeded (else "imaging clock").
+
+This DTS iteration:
+  * startup-delay-us = 10 ms on the wired LDOs so bulk_enable
+    returns after a settle window (driver only waits 5 ms after
+    reset). Not regulator-always-on / boot-on -- last resort only.
+  * Declare unused l1m/l3m so a later one-line supply swap is
+    possible if these LDOs are the wrong physical rails.
+  * Do not enable OV08X40 (same 0x36). FHD+IR spec and OF bind
+    at 8-0036 still point at OV02C10; -110 is no-ACK not chip-id
+    mismatch.
+
+Signed-off-by: Grokbot <grokbot@s-w.art>
+--- a/arch/arm64/boot/dts/qcom/x1-asus-vivobook-s15.dtsi
++++ b/arch/arm64/boot/dts/qcom/x1-asus-vivobook-s15.dtsi
+@@ -1,12 +1,12 @@
+ 	/*
+-	 * HUNCH: PM8010 camera PMIC (RPMh id m). Live i2cdetect on
+-	 * CCI i2c-5..8 is all-empty while USB 1.2/1.8 V rails are
+-	 * already on, so the sensor is not on those rails. Every
+-	 * published x1e80100 RGB camera uses pm8010 for AVDD/DVDD/
+-	 * DOVDD. 7.2 already matches qcom,pm8010-rpmh-regulators.
+-	 * Parents are this board's s5j / s4c / bob1 -- not Yoga
+-	 * phandles. If this PMIC is absent, rpmh-regulator / ov02c10
+-	 * probe will fail; that is the live check.
++	 * PM8010 camera PMIC (RPMh id m). Live 7.2.2-13: l2m/l4m/l7m
++	 * SET voltage then ov02c10 chip-id -110; after fail the vregs
++	 * are disabled because probe calls power_off. CMD-DB has
++	 * ldom2/4/7 -- id m is not a silent miss. Remaining hunches:
++	 * wrong physical LDO (swap to l1m/l3m below), reset gpio237
++	 * polarity/number, MCLK gpio100 not reaching the module.
++	 * Parents are this board's s5j / s4c / bob1.
++	 * Do not use regulator-always-on; that hides sequencing.
+ 	 */
+ 	regulators-8 {
+ 		compatible = "qcom,pm8010-rpmh-regulators";
+@@ -16,12 +16,31 @@
+ 		vdd-l3-l4-supply = <&vreg_s4c_1p8>;
+ 		vdd-l7-supply = <&vreg_bob1>;
+ 
++		/* Unused alt DVDD -- wire instead of l2m if still -110 */
++		vreg_l1m_1p2: ldo1 {
++			regulator-name = "vreg_l1m_1p2";
++			regulator-min-microvolt = <1200000>;
++			regulator-max-microvolt = <1260000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++		};
++
+ 		/* RGB DVDD */
+ 		vreg_l2m_1p2: ldo2 {
+ 			regulator-name = "vreg_l2m_1p2";
+ 			regulator-min-microvolt = <1200000>;
+ 			regulator-max-microvolt = <1260000>;
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			/* Settle before ov02c10 reset pulse + CCI read */
++			regulator-enable-ramp-delay = <10000>;
++			startup-delay-us = <10000>;
++		};
++
++		/* Unused alt DOVDD -- wire instead of l4m if still -110 */
++		vreg_l3m_1p8: ldo3 {
++			regulator-name = "vreg_l3m_1p8";
++			regulator-min-microvolt = <1800000>;
++			regulator-max-microvolt = <1900000>;
++			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+ 
+ 		/* RGB DOVDD */
+@@ -30,6 +49,8 @@
+ 			regulator-min-microvolt = <1800000>;
+ 			regulator-max-microvolt = <1900000>;
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			regulator-enable-ramp-delay = <10000>;
++			startup-delay-us = <10000>;
+ 		};
+ 
+ 		/* RGB AVDD */
+@@ -38,5 +59,7 @@
+ 			regulator-min-microvolt = <2800000>;
+ 			regulator-max-microvolt = <2800000>;
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
++			regulator-enable-ramp-delay = <10000>;
++			startup-delay-us = <10000>;
+ 		};
+ 	};
+@@ -1408,16 +1431,16 @@
+  * can use those nodes -- it does not create video devices.
+  *
+  * Live 7.2.2-12: CCI0=i2c-5/6 CCI1=i2c-7/8; i2cdetect 5..8 ALL EMPTY
+- * (CCI queue timeouts). ov02c10.ko unmatched. Empty scan means
+- * unpowered, not "wrong address". Do not reinvent CAMSS/CCI.
++ * then 7.2.2-13 OF-bound ov02c10 8-0036; chip-id 0x300a -110.
++ * vregs SET then power_off disables them. Bus/addr confirmed.
+  *
+- * HUNCH: OV02C10 @ CCI1 i2c1 0x36 => i2c-8. Also scan 5/6/7 after
+- * probe. OV08X40 is the same 0x36 / 4-lane alternative -- not both.
++ * OV08X40 is the same 0x36 / 4-lane alternative -- do not enable
++ * both. -110 is no-ACK, not a chip-id mismatch.
+  *
+- * HUNCH power: pm8010 RGB rails (see regulators-8). USB 1.2/1.8 V
+- * rails are already on and still no ACK -- do not reuse them as
+- * avdd/dvdd/dovdd. HUNCH reset/MCLK: gpio237 + gpio100 cam_aon /
+- * MCLK4 @ 19.2 MHz (SoC reference-design pins; unused here).
++ * HUNCH remaining: physical LDO map, reset gpio237 polarity, MCLK
++ * gpio100. ACPI Windows HID is QCOM0C06 (Spectra), not OVTI02C1;
++ * no public S5507QA camera DTS. SoC ref-design still gpio237 +
++ * gpio100 cam_aon / MCLK4 @ 19.2 MHz.
+  *
+  * v7.2 CAMSS is legacy embedded-CSIPHY: sensor -> &camss port@3
+  * (csiphy4). Separate &csiphy4 is the later PHY-API series.
+@@ -1470,7 +1493,12 @@
+ 	status = "okay";
+ };
+ 
+-/* HUNCH: CCI1 i2c1 == live i2c-8 on 7.2.2-12 */
++/*
++ * CCI1 i2c1 == live i2c-8. 7.2.2-13 OF-bound ov02c10 8-0036.
++ * power_on: MCLK, then rails (10 ms startup-delay-us), then
++ * XSHUTDOWN deassert (ACTIVE_LOW gpio237), then CCI chip-id.
++ * Do not add a second camera@36 (OV08X40); swap compatible only.
++ */
+ &cci1_i2c1 {
+ 	camera@36 {
+ 		compatible = "ovti,ov02c10";
+@@ -1486,7 +1514,7 @@
+ 
+ 		orientation = <0>; /* front facing */
+ 
+-		/* HUNCH: pm8010 RGB rails -- see regulators-8 */
++		/* Wired: l7m/l2m/l4m. Alt (declared, unused): l1m/l3m */
+ 		avdd-supply = <&vreg_l7m_2p8>;
+ 		dvdd-supply = <&vreg_l2m_1p2>;
+ 		dovdd-supply = <&vreg_l4m_1p8>;
