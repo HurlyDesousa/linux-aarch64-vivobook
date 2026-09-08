@@ -130,8 +130,8 @@ If `msm_csid0` fails, repeat the last two `-l` lines with `msm_csid1` …
 
 ```bash
 v4l2-ctl -d "$VIDEO" --list-formats-ext
-v4l2-ctl -d "$VIDEO" --set-fmt-video=width=1928,height=1092,pixelformat=RG10
-# if RG10 missing, pick a 10-bit Bayer from --list-formats-ext
+v4l2-ctl -d "$VIDEO" --set-fmt-video=width=1928,height=1092,pixelformat=pgAA
+# live video0: pgAA (10-bit GRBG packed), pRAA, BG10, GRBG, BA81, …
 
 OUT=/tmp/ov02c10.raw
 rm -f "$OUT"
@@ -206,7 +206,7 @@ media-ctl -d "$MEDIA" -V "\"$CSID\":0[fmt:$FMT]" -V "\"$CSID\":1[fmt:$FMT]"
 media-ctl -d "$MEDIA" -V "\"$VFE\":0[fmt:$FMT]"
 media-ctl -d "$MEDIA" -l "\"$CSIPHY\":1->\"$CSID\":0[1]"
 media-ctl -d "$MEDIA" -l "\"$CSID\":1->\"$VFE\":0[1]"
-v4l2-ctl -d "$VIDEO" --set-fmt-video=width=1928,height=1092,pixelformat=RG10
+v4l2-ctl -d "$VIDEO" --set-fmt-video=width=1928,height=1092,pixelformat=pgAA
 v4l2-ctl -d "$VIDEO" --stream-mmap --stream-count=10 --stream-to=/tmp/ov02c10.raw
 ls -l /tmp/ov02c10.raw; wc -c /tmp/ov02c10.raw
 

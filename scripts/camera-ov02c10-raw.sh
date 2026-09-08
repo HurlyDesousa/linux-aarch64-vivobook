@@ -6,7 +6,7 @@ set -euo pipefail
 
 FRAMES="${FRAMES:-10}"
 OUT="${OUT:-/tmp/ov02c10.raw}"
-PIXFMT="${PIXFMT:-RG10}"
+PIXFMT="${PIXFMT:-pgAA}"
 MEDIA="${MEDIA:-/dev/media0}"
 VIDEO="${VIDEO:-/dev/video0}"
 DRY_RUN=0
@@ -23,7 +23,7 @@ Tries CSID candidates in order: msm_csid0 .. msm_csid4 (override with CSID=).
 
 Environment:
   MEDIA=/dev/media0   VIDEO=/dev/video0
-  FRAMES=10  OUT=/tmp/ov02c10.raw  PIXFMT=RG10
+  FRAMES=10  OUT=/tmp/ov02c10.raw  PIXFMT=pgAA
   CSID=        force one CSID (skip auto-try)
   CSIPHY=msm_csiphy4  VFE=msm_vfe0_rdi0
   CSIPHY_SRC_PAD=1 CSIPHY_SINK_PAD=0
@@ -72,14 +72,15 @@ pick_pixfmt() {
     echo "$want"
     return
   fi
-  for fmt in RG10 SGRBG10 SGRBG10P BA10 SGRBG8; do
+  # pkgrel 15 live /dev/video0 advertises pgAA (10-bit GRBG packed) first.
+  for fmt in pgAA pGAA pRAA BG10 GRBG BA81 RG10 SGRBG10 SGRBG10P BA10 SGRBG8; do
     if v4l2-ctl -d "$video" --list-formats-ext 2>/dev/null | rg -q "^\s*${fmt}\s"; then
       log "PIXFMT=$want unavailable on $video; using $fmt"
       echo "$fmt"
       return
     fi
   done
-  die "no Bayer pixelformat on $video"
+  die "no Bayer pixelformat on $video (--list-formats-ext on $video)"
 }
 
 setup_formats() {
