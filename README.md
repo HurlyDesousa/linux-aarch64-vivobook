@@ -29,6 +29,9 @@ out of scope.
 
 Install / VERIFY:
 [docs/camera-phase-c.md](docs/camera-phase-c.md).
+Raw capture after probe:
+[docs/camera-phase-c-preview.md](docs/camera-phase-c-preview.md)
+(`scripts/camera-ov02c10-raw.sh`).
 
 ---
 
