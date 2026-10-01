@@ -6,9 +6,10 @@ Do not shut down lite PAS until DTB init succeeds. If TZ rejects the
 DTB on a rproc that has lite_pas_id, attach to the running UEFI lite
 ADSP so GLINK/battmgr can work instead of failing start.
 
+diff --git a/drivers/remoteproc/qcom_q6v5_pas.c b/drivers/remoteproc/qcom_q6v5_pas.c
 --- a/drivers/remoteproc/qcom_q6v5_pas.c
 +++ b/drivers/remoteproc/qcom_q6v5_pas.c
-@@ -83,6 +83,7 @@
+@@ -84,6 +84,7 @@
  	int dtb_pas_id;
  	int lite_pas_id;
  	int lite_dtb_pas_id;
@@ -16,7 +17,7 @@ ADSP so GLINK/battmgr can work instead of failing start.
  	unsigned int minidump_id;
  	int crash_reason_smem;
  	unsigned int smem_host_id;
-@@ -119,6 +120,11 @@
+@@ -120,6 +121,11 @@
  	struct qcom_scm_pas_context *dtb_pas_ctx;
  };
  
@@ -28,7 +29,7 @@ ADSP so GLINK/battmgr can work instead of failing start.
  static void qcom_pas_segment_dump(struct rproc *rproc,
  				  struct rproc_dump_segment *segment,
  				  void *dest, size_t offset, size_t size)
-@@ -216,41 +222,45 @@
+@@ -217,36 +223,43 @@
  	return 0;
  }
  
@@ -68,39 +69,35 @@ ADSP so GLINK/battmgr can work instead of failing start.
 -		ret = qcom_mdt_pas_load(pas->dtb_pas_ctx, pas->dtb_firmware,
 -					pas->dtb_firmware_name, pas->dtb_mem_region,
 -					&pas->dtb_mem_reloc);
--		if (ret)
--			goto release_dtb_metadata;
+-		if (ret) {
+-			qcom_scm_pas_metadata_release(pas->dtb_pas_ctx);
+-			release_firmware(pas->dtb_firmware);
+-			return ret;
+-		}
 -	}
 +	dev_err(pas->dev,
 +		"TZ rejected ADSP DTB (err=%d); attaching to UEFI lite ADSP (PAS 0x%x) so GLINK/battmgr can work\n",
 +		dtb_err, pas->lite_pas_id);
 +	dev_warn(pas->dev,
 +		 "attach-to-lite fallback, not a TZ signature fix; full audio ADSP still needs a TZ-accepted DTB\n");
- 
--	return 0;
++
 +	pas->lite_attached = true;
 +	pas->q6v5.handover_issued = true;
 +	pas->firmware = NULL;
- 
--release_dtb_metadata:
--	qcom_scm_pas_metadata_release(pas->dtb_pas_ctx);
--	release_firmware(pas->dtb_firmware);
++
 +	return true;
 +}
- 
--	return ret;
++
 +static int qcom_pas_load(struct rproc *rproc, const struct firmware *fw)
 +{
 +	struct qcom_pas *pas = rproc->priv;
 +
 +	/* Store firmware handle to be used in qcom_pas_start() */
 +	pas->firmware = fw;
-+
-+	return 0;
- }
  
- static void qcom_pas_unmap_carveout(struct rproc *rproc, phys_addr_t mem_phys, size_t size)
-@@ -302,10 +312,48 @@
+ 	return 0;
+ }
+@@ -300,10 +313,48 @@
  			goto disable_cx_supply;
  	}
  
@@ -150,7 +147,7 @@ ADSP so GLINK/battmgr can work instead of failing start.
  
  		ret = qcom_scm_pas_prepare_and_auth_reset(pas->dtb_pas_ctx);
  		if (ret) {
-@@ -313,6 +361,9 @@
+@@ -311,6 +362,9 @@
  				"failed to authenticate dtb image and release reset\n");
  			goto unmap_dtb_carveout;
  		}
@@ -160,7 +157,7 @@ ADSP so GLINK/battmgr can work instead of failing start.
  	}
  
  	ret = qcom_mdt_pas_load(pas->pas_ctx, pas->firmware, rproc->firmware,
-@@ -347,6 +398,11 @@
+@@ -345,6 +399,11 @@
  	/* firmware is used to pass reference from qcom_pas_start(), drop it now */
  	pas->firmware = NULL;
  
@@ -172,7 +169,7 @@ ADSP so GLINK/battmgr can work instead of failing start.
  	return 0;
  
  unmap_carveout:
-@@ -359,6 +415,12 @@
+@@ -357,6 +416,12 @@
  unmap_dtb_carveout:
  	if (pas->dtb_pas_id)
  		qcom_pas_unmap_carveout(rproc, pas->dtb_mem_phys, pas->dtb_mem_size);
@@ -185,7 +182,7 @@ ADSP so GLINK/battmgr can work instead of failing start.
  disable_px_supply:
  	if (pas->px_supply)
  		regulator_disable(pas->px_supply);
-@@ -399,6 +461,15 @@
+@@ -397,6 +462,15 @@
  	int handover;
  	int ret;
  
@@ -201,6 +198,7 @@ ADSP so GLINK/battmgr can work instead of failing start.
  	ret = qcom_q6v5_request_stop(&pas->q6v5, pas->sysmon);
  	if (ret == -ETIMEDOUT)
  		dev_err(pas->dev, "timed out on wait\n");
+diff --git a/drivers/firmware/qcom/qcom_scm.c b/drivers/firmware/qcom/qcom_scm.c
 --- a/drivers/firmware/qcom/qcom_scm.c
 +++ b/drivers/firmware/qcom/qcom_scm.c
 @@ -642,8 +642,9 @@
