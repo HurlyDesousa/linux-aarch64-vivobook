@@ -1,5 +1,31 @@
 # ADSP -22 on ASUS Vivobook S15 (x1e80100)
 
+## Root cause (2026-10-01): product ID mismatch
+
+The ADSP pair was signed for the wrong variant. Decoding the MBN v7 hash
+segment (header 40 B, common metadata 24 B, OEM metadata 224 B; OEM word 34 =
+OEM ID, word 35 = product ID, word 55 = flags):
+
+| file | signer | OEM ID | product ID | flags |
+|------|--------|--------|------------|-------|
+| `qcdxkmsuc8380.mbn`, `cdsp_dtbs.elf`, `qccdsp8380.mbn` (load) | QTI CASS (QMC Attestation Root CA 6) | `0x14d` | 0 | `0x155656` |
+| August `adsp_dtbs.elf` / `qcadsp8380.mbn` (-22) | `S5507QA ROOT CA` | `0x29` | **3** | `0x155a56` |
+| S5507QAD BSP `..._QAD_Signed` pair (loads) | `S5507QA ROOT CA` | `0x29` | **2** | `0x155a56` |
+
+Flag bits 10-11 enforce the product ID. The S5507QAD fuses product ID 2, so
+TZ rejected the product-3 images from any loader. The QAD pair from ASUS
+*Qualcomm Board Support Package* V1.367.7800.0 (S5507QAD download, folder
+`qcsubsys_ext_adsp8380_QAD_Signed/`) authenticates on the stock NS path:
+
+```
+PAS shutdown lite (id=0x1f): 0
+PAS shutdown lite-dtb (id=0x29): 0
+remoteproc remoteproc0: remote processor adsp is now up
+qcom,apr ...: Adding APR/GPR dev: gprsvc:service:2:1
+```
+
+The sections below predate this and are kept as history.
+
 Symptom on Omarchy ARM, `linux-aarch64-vivobook` 7.2.x:
 
 ```

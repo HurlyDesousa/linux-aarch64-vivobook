@@ -174,6 +174,27 @@ merges this fragment.
 
 ## ADSP -22
 
+**Root cause (2026-10-01): wrong product ID in the ADSP signature.** This
+unit is an S5507QAD (`S5507QA_S5507QAD`, BIOS `S5507QAD.368`). The
+`qcadsp8380.mbn` / `adsp_dtbs.elf` pair used since August was signed for
+product ID 3 (the plain S5507QA); TZ enforces product ID 2 here, so PAS_INIT
+of 0x24 and 0x1 returned -22. Same `S5507QA ROOT CA` and OEM ID `0x29`;
+only the product ID (MBN v7 OEM metadata word 35, enforce flag bits 10-11)
+differs. With the QAD-signed pair, lite 0x1f/0x29 shut down, DTB and main
+authenticate, the full ADSP comes up (GPR/APM services, battmgr SOC from
+firmware). Not a NS-loading limit; qebspil/dtbloader are not needed.
+
+Source: ASUS *Qualcomm Board Support Package* V1.367.7800.0 for S5507QAD
+(`SOCPackage_forWebSite_Qualcomm_Z_V1.367.7800.0_44984.exe`, sha256
+`90bb38a0…67bc`), Inno Setup wrapper with an embedded 7z at offset
+`0x415e88`, folder
+`Driver/QualcommBSP/Subsystem/qcsubsys_ext_adsp8380_QAD_Signed/`.
+Installed sha256: `qcadsp8380.mbn` `d8e2d3d5…05f7`, `adsp_dtbs.elf`
+`e251321b…96c6`; the product-3 pair is kept as `*.S5507QA-product3.bak`.
+The `.jsn` files are identical. `0001` attach-to-lite stays as the fallback.
+Sound DTS: `0011-x1e80100-vivobook-s15-sound.patch` (pkgrel 2). The
+sections below are the earlier investigation.
+
 Not a DTS carveout mismatch. The ELF and the 7.2 DTS already agree:
 
 - `adsp_dtbs.elf` PT_LOAD paddr `0x8b800000` filesz `0x10e4c` (CFGL + 8 DTBs:
