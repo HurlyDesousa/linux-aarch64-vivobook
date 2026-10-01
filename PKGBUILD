@@ -5,12 +5,12 @@
 buildarch=8
 
 pkgbase=linux-aarch64-vivobook
-_alarmver=7.2.2
+_alarmver=7.2.8
 _alarmrel=2
 _srcname=linux-7.2
 _desc="AArch64 Vivobook S15 (x1e80100)"
 pkgver=${_alarmver}
-pkgrel=15
+pkgrel=1
 arch=('aarch64')
 url="https://github.com/HurlyDesousa/linux-aarch64-vivobook"
 license=('GPL-2.0-only')
@@ -41,7 +41,7 @@ source=("https://www.kernel.org/pub/linux/kernel/v7.x/${_srcname}.tar.xz"
 # sources and does not match these URLs.
 # ALARM tip config can drift; md5 must match the fetched ${_alarm}/config file.
 md5sums=('381ae4b20294dcf4b8f63f1fd1bb7017'  # linux-7.2.tar.xz
-         '4ed13fbca5aa1335e460f019010fb966'  # patch-7.2.2.xz
+         '4d648a6b759a60af2060289e5503266e'  # patch-7.2.8.xz
          '328ab847d1a56a5cabbb4779d931a175'  # 0001
          'c4aa031077a71d86837ed1624e8ca4de'  # 0002
          '86dc20adc64478c726a7a9f8fcf56337'  # 0003
@@ -67,9 +67,8 @@ prepare() {
   echo "-$pkgrel" > localversion.10-pkgrel
   echo "${pkgbase#linux}" > localversion.20-pkgname
 
-  if [[ -f ../patch-${_alarmver} ]]; then
-    git apply --whitespace=nowarn ../patch-${_alarmver}
-  fi
+  # Not git apply: src/ sits inside this git repo, where git apply silently skips every path.
+  patch -Np1 --batch < ../patch-${_alarmver}
 
   git apply ../0001-arm64-dts-rockchip-disable-pwm0-on-rk3399-firefly.patch
   git apply ../0002-pps-Compatibility-hack-should-be-X86-specific.patch
